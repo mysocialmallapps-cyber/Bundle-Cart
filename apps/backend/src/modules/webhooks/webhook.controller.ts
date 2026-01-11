@@ -75,6 +75,17 @@ export async function webhookReceiver(req: Request, res: Response) {
   }
 
   try {
+    if (merchant?.uninstalled_at && headers.topic !== "app/uninstalled") {
+      // Do not process business logic for uninstalled merchants.
+      await markWebhookProcessed({
+        id: insert.id,
+        status: "ignored",
+        error: "merchant_uninstalled"
+      });
+      req.log?.info?.({ shopDomain, topic: headers.topic }, "Webhook ignored (merchant uninstalled)");
+      return res.status(200).send("ok");
+    }
+
     switch (headers.topic) {
       case "app/uninstalled": {
         await markMerchantUninstalled(shopDomain);

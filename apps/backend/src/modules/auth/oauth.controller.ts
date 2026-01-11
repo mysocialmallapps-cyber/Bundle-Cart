@@ -6,6 +6,7 @@ import { normalizeShopDomain } from "../../shopify/shopDomain";
 import { verifyShopifyOAuthHmac } from "../../shopify/hmac";
 import { encryptString } from "../../utils/crypto";
 import { upsertMerchant } from "../merchants/merchants.repo";
+import { registerRequiredWebhooks } from "../lifecycle/webhookRegistration.service";
 
 const OAUTH_STATE_COOKIE = "bundlecart_oauth_state";
 
@@ -84,13 +85,21 @@ export async function oauthCallback(req: Request, res: Response) {
   const token = await exchangeCodeForToken({ shop, code });
   const enc = encryptString(token.access_token, env.ENCRYPTION_KEY_BASE64);
 
-  await upsertMerchant({
+  const merchant = await upsertMerchant({
     shopDomain: shop,
     shopId: null, // can be populated later via Shopify API call
     accessTokenCiphertext: enc.ciphertextB64,
     accessTokenIv: enc.ivB64,
     accessTokenTag: enc.tagB64,
     scopes: token.scope
+  });
+
+  // Webhooks must be re-registered on install/re-install.
+  await registerRequiredWebhooks({
+    shopDomain: shop,
+    accessToken: token.access_token,
+    merchantId: merchant.id,
+    logger
   });
 
   res.clearCookie(OAUTH_STATE_COOKIE);
