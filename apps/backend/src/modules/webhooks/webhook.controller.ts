@@ -7,6 +7,7 @@ import {
   insertWebhookEventIfNew,
   markWebhookProcessed
 } from "./webhookEvents.repo";
+import { handleOrdersCreate } from "./handlers/orders_create";
 
 type ShopifyWebhookHeaders = {
   topic?: string;
@@ -82,9 +83,13 @@ export async function webhookReceiver(req: Request, res: Response) {
         break;
       }
       case "orders/create": {
-        // Linking logic will be implemented next. For now we only persist the webhook event.
+        await handleOrdersCreate({
+          logger: req.log,
+          merchantId: merchant?.id ?? null,
+          shopDomain,
+          payload
+        });
         await markWebhookProcessed({ id: insert.id, status: "processed" });
-        req.log?.info?.({ shopDomain }, "orders/create webhook received");
         break;
       }
       default: {
