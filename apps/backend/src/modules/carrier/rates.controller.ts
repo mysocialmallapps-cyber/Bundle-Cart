@@ -5,6 +5,7 @@ import { determineEligibility } from "./rates.service";
 import { insertShippingDecision } from "./shippingDecisions.repo";
 import { findMerchantByShopDomain } from "../merchants/merchants.repo";
 import { normalizeEmail } from "../customers/customers.service";
+import { carrierLatency } from "./latencyMetrics";
 
 type LoggerLike = {
   info?: (obj: any, msg?: string) => void;
@@ -68,6 +69,7 @@ function parseJsonBody(rawBody: unknown): unknown {
  */
 export async function carrierRatesCallback(req: Request, res: Response) {
   const logger = (req.log as LoggerLike | undefined) ?? undefined;
+  const start = process.hrtime.bigint();
 
   const shopDomain = normalizeShopDomain(req.query.shop as string | undefined);
   if (!shopDomain) return res.status(200).json(emptyRatesResponse());
@@ -86,6 +88,21 @@ export async function carrierRatesCallback(req: Request, res: Response) {
       qualified: false,
       reason: "invalid_json"
     });
+    const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
+    carrierLatency.record(durationMs);
+    const q = carrierLatency.quantiles();
+    logger?.info?.(
+      {
+        requestId,
+        shopDomain,
+        merchantId: null,
+        duration_ms: Math.round(durationMs),
+        p50_ms: q.p50_ms,
+        p95_ms: q.p95_ms,
+        error_class: "internal_error"
+      },
+      "Carrier callback complete"
+    );
     return res.status(200).json(emptyRatesResponse());
   }
   const email = extractEmail(payload);
@@ -104,11 +121,28 @@ export async function carrierRatesCallback(req: Request, res: Response) {
       qualified: false,
       reason: !merchant ? "unknown_merchant" : "merchant_uninstalled"
     });
+    const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
+    carrierLatency.record(durationMs);
+    const q = carrierLatency.quantiles();
+    logger?.info?.(
+      {
+        requestId,
+        shopDomain,
+        merchantId: merchant?.id ?? null,
+        duration_ms: Math.round(durationMs),
+        p50_ms: q.p50_ms,
+        p95_ms: q.p95_ms,
+        error_class: null
+      },
+      "Carrier callback complete"
+    );
     return res.status(200).json(emptyRatesResponse());
   }
 
   // Hard timeout guard: never block checkout. Fail open on timeout/error.
   const HARD_TIMEOUT_MS = 1200;
+  let errorClass: "timeout" | "upstream_shopify_error" | "internal_error" | null = null;
+  let qualified: boolean | null = null;
 
   try {
     const result = await Promise.race([
@@ -121,6 +155,7 @@ export async function carrierRatesCallback(req: Request, res: Response) {
     ]);
 
     if (result.qualified) {
+      qualified = true;
       logger?.info?.(
         {
           requestId,
@@ -149,6 +184,22 @@ export async function carrierRatesCallback(req: Request, res: Response) {
         reason: result.reason
       });
 
+      const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
+      carrierLatency.record(durationMs);
+      const q = carrierLatency.quantiles();
+      logger?.info?.(
+        {
+          requestId,
+          shopDomain,
+          merchantId: merchant.id,
+          duration_ms: Math.round(durationMs),
+          p50_ms: q.p50_ms,
+          p95_ms: q.p95_ms,
+          qualified,
+          error_class: null
+        },
+        "Carrier callback complete"
+      );
       return res.status(200).json({
         rates: [
           {
@@ -162,6 +213,7 @@ export async function carrierRatesCallback(req: Request, res: Response) {
       });
     }
 
+    qualified = false;
     await insertShippingDecision({
       requestId,
       merchantId: merchant.id,
@@ -172,9 +224,38 @@ export async function carrierRatesCallback(req: Request, res: Response) {
       qualified: false,
       reason: result.reason
     });
+    const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
+    carrierLatency.record(durationMs);
+    const q = carrierLatency.quantiles();
+    logger?.info?.(
+      {
+        requestId,
+        shopDomain,
+        merchantId: merchant.id,
+        duration_ms: Math.round(durationMs),
+        p50_ms: q.p50_ms,
+        p95_ms: q.p95_ms,
+        qualified,
+        error_class: null
+      },
+      "Carrier callback complete"
+    );
     return res.status(200).json(emptyRatesResponse());
   } catch (err: any) {
-    logger?.error?.({ err, requestId, shopDomain, email }, "Carrier callback failed (fail open)");
+    const msg = String(err?.message ?? "");
+    if (msg === "carrier_timeout") {
+      errorClass = "timeout";
+    } else if (msg.startsWith("Shopify REST") || msg.includes("shopify")) {
+      // Future-proofing: if we ever add Shopify calls to the carrier callback path.
+      errorClass = "upstream_shopify_error";
+    } else {
+      errorClass = "internal_error";
+    }
+
+    logger?.error?.(
+      { err, requestId, shopDomain, merchantId: merchant.id, email, error_class: errorClass },
+      "Carrier callback failed (fail open)"
+    );
     await insertShippingDecision({
       requestId,
       merchantId: merchant.id,
@@ -185,6 +266,22 @@ export async function carrierRatesCallback(req: Request, res: Response) {
       qualified: false,
       reason: err?.message ?? "error"
     });
+    const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
+    carrierLatency.record(durationMs);
+    const q = carrierLatency.quantiles();
+    logger?.info?.(
+      {
+        requestId,
+        shopDomain,
+        merchantId: merchant.id,
+        duration_ms: Math.round(durationMs),
+        p50_ms: q.p50_ms,
+        p95_ms: q.p95_ms,
+        qualified: false,
+        error_class: errorClass
+      },
+      "Carrier callback complete"
+    );
     return res.status(200).json(emptyRatesResponse());
   }
 }
