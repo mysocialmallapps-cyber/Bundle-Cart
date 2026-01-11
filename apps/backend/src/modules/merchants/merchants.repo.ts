@@ -79,10 +79,25 @@ export async function markMerchantUninstalled(shopDomain: string): Promise<void>
         access_token_iv = NULL,
         access_token_tag = NULL,
         access_token_invalidated_at = NOW(),
+        carrier_service_id = NULL,
         updated_at = NOW()
       WHERE shop_domain = $1
     `,
     [shopDomain]
+  );
+}
+
+export async function updateMerchantCarrierServiceId(input: {
+  merchantId: string;
+  carrierServiceId: number;
+}): Promise<void> {
+  await pool.query(
+    `
+      UPDATE merchants
+      SET carrier_service_id = $2, updated_at = NOW()
+      WHERE id = $1
+    `,
+    [input.merchantId, input.carrierServiceId]
   );
 }
 

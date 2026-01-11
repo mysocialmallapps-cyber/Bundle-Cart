@@ -7,6 +7,7 @@ import { verifyShopifyOAuthHmac } from "../../shopify/hmac";
 import { encryptString } from "../../utils/crypto";
 import { upsertMerchant } from "../merchants/merchants.repo";
 import { registerRequiredWebhooks } from "../lifecycle/webhookRegistration.service";
+import { registerCarrierServiceOnInstall } from "../lifecycle/carrierRegistration.service";
 
 const OAUTH_STATE_COOKIE = "bundlecart_oauth_state";
 
@@ -96,6 +97,13 @@ export async function oauthCallback(req: Request, res: Response) {
 
   // Webhooks must be re-registered on install/re-install.
   await registerRequiredWebhooks({
+    shopDomain: shop,
+    accessToken: token.access_token,
+    merchantId: merchant.id,
+    logger
+  });
+
+  await registerCarrierServiceOnInstall({
     shopDomain: shop,
     accessToken: token.access_token,
     merchantId: merchant.id,

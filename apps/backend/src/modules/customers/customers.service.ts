@@ -29,3 +29,11 @@ export async function upsertCustomerByEmail(email: string): Promise<Customer> {
   return res.rows[0]!;
 }
 
+export async function findCustomerByEmail(email: string): Promise<Customer | null> {
+  const res = await pool.query<Customer>(
+    `SELECT id, email FROM customers WHERE email = $1 LIMIT 1`,
+    [email]
+  );
+  return res.rows[0] ?? null;
+}
+

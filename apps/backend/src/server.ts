@@ -23,10 +23,12 @@ async function main() {
   app.use(cookieParser());
 
   // JSON parsing is enabled by default for most routes.
-  // Webhooks require raw body parsing, so we skip JSON parsing for that path.
+  // Webhooks + carrier callback use raw body parsing; we skip JSON parsing for those paths
+  // to avoid signature issues (webhooks) and to fail-open on malformed JSON (carrier).
   const jsonParser = express.json({ limit: "1mb" });
   app.use((req, res, next) => {
     if (req.path === "/api/webhooks") return next();
+    if (req.path === "/api/carrier/rates") return next();
     return jsonParser(req, res, next);
   });
 
