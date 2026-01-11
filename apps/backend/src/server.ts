@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 import { env } from "./config/env";
 import { logger } from "./config/logger";
 import { registerRoutes } from "./routes";
+import { registerAdminUiStatic } from "./modules/adminUi/staticUi";
 
 async function main() {
   const app = express();
@@ -33,6 +34,7 @@ async function main() {
   });
 
   registerRoutes(app);
+  registerAdminUiStatic(app);
 
   app.listen(env.PORT, () => {
     logger.info({ port: env.PORT }, "Backend listening");

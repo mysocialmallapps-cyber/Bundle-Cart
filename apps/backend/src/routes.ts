@@ -3,6 +3,7 @@ import express from "express";
 import { beginInstall, oauthCallback } from "./modules/auth/oauth.controller";
 import { webhookReceiver } from "./modules/webhooks/webhook.controller";
 import { carrierRatesCallback } from "./modules/carrier/rates.controller";
+import { registerAdminRoutes } from "./modules/adminApi/admin.router";
 
 export function registerRoutes(app: Express) {
   app.get("/health", (_req, res) => res.status(200).json({ ok: true }));
@@ -23,5 +24,7 @@ export function registerRoutes(app: Express) {
     express.raw({ type: "application/json", limit: "2mb" }),
     carrierRatesCallback
   );
+
+  registerAdminRoutes(app);
 }
 

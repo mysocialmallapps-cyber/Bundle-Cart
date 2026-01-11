@@ -70,6 +70,7 @@ export async function oauthCallback(req: Request, res: Response) {
   const shop = normalizeShopDomain(req.query.shop as string | undefined);
   const code = req.query.code as string | undefined;
   const state = req.query.state as string | undefined;
+  const host = (req.query.host as string | undefined) ?? undefined;
 
   if (!shop || !code || !state) return res.status(400).send("Missing parameters");
 
@@ -113,7 +114,10 @@ export async function oauthCallback(req: Request, res: Response) {
   res.clearCookie(OAUTH_STATE_COOKIE);
   logger.info({ shop }, "OAuth install completed");
 
-  // For now, just confirm install. Next steps will add embedded admin + webhook registration.
-  return res.status(200).send("BundleCart installed. You can close this window.");
+  // Redirect into embedded admin UI (frontend reads `host` param for App Bridge).
+  const redirect = new URL("/", env.APP_URL);
+  redirect.searchParams.set("shop", shop);
+  if (host) redirect.searchParams.set("host", host);
+  return res.redirect(redirect.toString());
 }
 
