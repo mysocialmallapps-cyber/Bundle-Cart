@@ -181,6 +181,10 @@ export function createApp() {
     res.type("application/javascript").send(`window.__BUNDLECART_CONFIG__ = ${config};`);
   });
 
+  app.get("/", (_req, res) => {
+    res.status(200).send("ok");
+  });
+
   app.use(express.static(DIST_PATH));
 
   app.get("/{*any}", (_req, res) => {
