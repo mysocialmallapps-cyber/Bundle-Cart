@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import express from "express";
+import { fileURLToPath } from "node:url";
 
 const DIST_PATH = path.resolve("dist");
 
@@ -84,14 +85,17 @@ export function createApp() {
 
   app.use(express.static(DIST_PATH));
 
-  app.get("*", (_req, res) => {
+  app.get("/{*any}", (_req, res) => {
     res.sendFile(path.join(DIST_PATH, "index.html"));
   });
 
   return app;
 }
 
-if (process.env.NODE_ENV !== "test") {
+const isDirectRun =
+  process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isDirectRun && process.env.NODE_ENV !== "test") {
   const app = createApp();
   const port = Number(process.env.PORT || 3000);
   app.listen(port, () => {
