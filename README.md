@@ -76,3 +76,22 @@ app.get("*", (_req, res) => {
   res.sendFile(path.join(distPath, "index.html"));
 });
 ```
+
+## Shopify webhook setup
+
+### Webhook endpoint
+
+Configure Shopify `orders/create` webhook to:
+
+`https://bundle-cart.replit.app/api/webhooks/orders-create`
+
+### Health check
+
+`https://bundle-cart.replit.app/api/webhooks/health`
+
+### Replit secret
+
+Set the webhook signing secret in **Replit Deployment Secrets**:
+
+- Key: `SHOPIFY_WEBHOOK_SECRET`
+- Value: your Shopify webhook signing secret (same secret used to sign `X-Shopify-Hmac-Sha256`)
