@@ -2,8 +2,53 @@ import crypto from "node:crypto";
 import path from "node:path";
 import express from "express";
 import { fileURLToPath } from "node:url";
+import pg from "pg";
 
 const DIST_PATH = path.resolve("dist");
+const { Pool } = pg;
+
+const DATABASE_URL = process.env.DATABASE_URL || "";
+const dbPool = DATABASE_URL ? new Pool({ connectionString: DATABASE_URL }) : null;
+
+const CREATE_SHOPIFY_ORDERS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS shopify_orders (
+  id SERIAL PRIMARY KEY,
+  shop_domain TEXT NOT NULL,
+  shopify_order_id BIGINT NOT NULL,
+  email TEXT,
+  created_at TIMESTAMP,
+  total_price NUMERIC,
+  currency TEXT,
+  webhook_id TEXT UNIQUE,
+  raw_payload JSONB,
+  inserted_at TIMESTAMP DEFAULT NOW()
+);
+`;
+
+const CREATE_SHOPIFY_ORDER_UNIQUES_SQL = `
+CREATE UNIQUE INDEX IF NOT EXISTS shopify_orders_shop_domain_order_id_uq
+ON shopify_orders (shop_domain, shopify_order_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS shopify_orders_webhook_id_uq
+ON shopify_orders (webhook_id)
+WHERE webhook_id IS NOT NULL;
+`;
+
+const INSERT_SHOPIFY_ORDER_SQL = `
+INSERT INTO shopify_orders (
+  shop_domain,
+  shopify_order_id,
+  email,
+  created_at,
+  total_price,
+  currency,
+  webhook_id,
+  raw_payload
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT DO NOTHING
+RETURNING id;
+`;
 
 function timingSafeCompare(left, right) {
   const leftBuffer = Buffer.from(left);
@@ -23,6 +68,47 @@ export function isValidShopifyWebhookSignature(rawBody, signature, secret) {
 
   const expected = crypto.createHmac("sha256", secret).update(rawBody).digest("base64");
   return timingSafeCompare(signature.trim(), expected);
+}
+
+export async function ensureOrdersTableExists() {
+  if (!dbPool) {
+    console.warn("DATABASE_URL not set; shopify_orders persistence disabled.");
+    return;
+  }
+
+  await dbPool.query(CREATE_SHOPIFY_ORDERS_TABLE_SQL);
+  await dbPool.query(CREATE_SHOPIFY_ORDER_UNIQUES_SQL);
+}
+
+async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPayload }) {
+  if (!dbPool) {
+    return;
+  }
+
+  if (!shopDomain || order?.id == null) {
+    return;
+  }
+
+  const orderId = String(order.id);
+  const createdAt = order.created_at || null;
+  const totalPrice = order.total_price != null ? String(order.total_price) : null;
+
+  const result = await dbPool.query(INSERT_SHOPIFY_ORDER_SQL, [
+    shopDomain,
+    orderId,
+    order.email || null,
+    createdAt,
+    totalPrice,
+    order.currency || null,
+    webhookId || null,
+    rawPayload
+  ]);
+
+  if (result.rowCount > 0) {
+    console.log(`ORDER SAVED id=${orderId} shop=${shopDomain}`);
+  } else {
+    console.log("ORDER DUPLICATE IGNORED");
+  }
 }
 
 export function createApp() {
@@ -53,17 +139,29 @@ export function createApp() {
       return;
     }
 
+    const order = payload?.order || payload || {};
     const shopDomain =
       req.get("X-Shopify-Shop-Domain") ||
       req.get("x-shopify-shop-domain") ||
-      payload?.shop_domain ||
       "";
+    const webhookId =
+      req.get("X-Shopify-Webhook-Id") || req.get("x-shopify-webhook-id") || "";
 
     console.log(
-      `WEBHOOK orders/create received id=${payload?.id ?? ""} email=${payload?.email ?? ""} created_at=${payload?.created_at ?? ""} total_price=${payload?.total_price ?? ""} shop=${shopDomain}`
+      `WEBHOOK orders/create received id=${order?.id ?? ""} email=${order?.email ?? ""} created_at=${order?.created_at ?? ""} total_price=${order?.total_price ?? ""} shop=${shopDomain}`
     );
 
     res.status(200).json({ ok: true });
+
+    // Persist asynchronously so webhook responses are not delayed.
+    void saveOrderCreateWebhookAsync({
+      shopDomain,
+      webhookId,
+      order,
+      rawPayload: payload
+    }).catch((error) => {
+      console.error("ORDER SAVE ERROR", error?.message || error);
+    });
   });
 
   app.use("/api", express.json());
@@ -96,9 +194,15 @@ const isDirectRun =
   process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 if (isDirectRun && process.env.NODE_ENV !== "test") {
-  const app = createApp();
-  const port = Number(process.env.PORT || 3000);
-  app.listen(port, () => {
-    console.log(`BundleCart server listening on port ${port}`);
-  });
+  ensureOrdersTableExists()
+    .catch((error) => {
+      console.error("Failed to ensure shopify_orders table", error?.message || error);
+    })
+    .finally(() => {
+      const app = createApp();
+      const port = Number(process.env.PORT || 3000);
+      app.listen(port, () => {
+        console.log(`BundleCart server listening on port ${port}`);
+      });
+    });
 }
