@@ -34,6 +34,41 @@ ON shopify_orders (webhook_id)
 WHERE webhook_id IS NOT NULL;
 `;
 
+const CREATE_MERCHANTS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS merchants (
+  shop_domain TEXT PRIMARY KEY,
+  installed_at TIMESTAMP DEFAULT NOW(),
+  last_webhook_at TIMESTAMP DEFAULT NOW()
+);
+`;
+
+const CREATE_LINK_GROUPS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS link_groups (
+  id SERIAL PRIMARY KEY,
+  email TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW(),
+  last_seen_at TIMESTAMP DEFAULT NOW()
+);
+`;
+
+const CREATE_LINKED_ORDERS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS linked_orders (
+  id SERIAL PRIMARY KEY,
+  group_id INTEGER NOT NULL REFERENCES link_groups(id) ON DELETE CASCADE,
+  shop_domain TEXT NOT NULL,
+  shopify_order_id BIGINT NOT NULL,
+  email TEXT NOT NULL,
+  created_at TIMESTAMP,
+  inserted_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE (shop_domain, shopify_order_id)
+);
+`;
+
+const CREATE_LINK_GROUPS_INDEX_SQL = `
+CREATE INDEX IF NOT EXISTS link_groups_email_last_seen_idx
+ON link_groups (email, last_seen_at DESC);
+`;
+
 const INSERT_SHOPIFY_ORDER_SQL = `
 INSERT INTO shopify_orders (
   shop_domain,
@@ -48,6 +83,55 @@ INSERT INTO shopify_orders (
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT DO NOTHING
 RETURNING id;
+`;
+
+const UPSERT_MERCHANT_SQL = `
+INSERT INTO merchants (shop_domain, installed_at, last_webhook_at)
+VALUES ($1, NOW(), NOW())
+ON CONFLICT (shop_domain)
+DO UPDATE SET last_webhook_at = NOW();
+`;
+
+const SELECT_RECENT_LINK_GROUP_SQL = `
+SELECT id
+FROM link_groups
+WHERE email = $1
+  AND last_seen_at >= NOW() - INTERVAL '72 hours'
+ORDER BY last_seen_at DESC
+LIMIT 1;
+`;
+
+const UPDATE_LINK_GROUP_LAST_SEEN_SQL = `
+UPDATE link_groups
+SET last_seen_at = NOW()
+WHERE id = $1;
+`;
+
+const INSERT_LINK_GROUP_SQL = `
+INSERT INTO link_groups (email, created_at, last_seen_at)
+VALUES ($1, NOW(), NOW())
+RETURNING id;
+`;
+
+const INSERT_LINKED_ORDER_SQL = `
+INSERT INTO linked_orders (
+  group_id,
+  shop_domain,
+  shopify_order_id,
+  email,
+  created_at
+)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (shop_domain, shopify_order_id) DO NOTHING
+RETURNING id;
+`;
+
+const SELECT_DEBUG_LINKED_ORDERS_BY_EMAIL_SQL = `
+SELECT id, group_id, shop_domain, shopify_order_id, email, created_at, inserted_at
+FROM linked_orders
+WHERE email = $1
+ORDER BY inserted_at DESC
+LIMIT 20;
 `;
 
 function timingSafeCompare(left, right) {
@@ -76,6 +160,10 @@ export async function ensureOrdersTableExists() {
     return;
   }
 
+  await dbPool.query(CREATE_MERCHANTS_TABLE_SQL);
+  await dbPool.query(CREATE_LINK_GROUPS_TABLE_SQL);
+  await dbPool.query(CREATE_LINKED_ORDERS_TABLE_SQL);
+  await dbPool.query(CREATE_LINK_GROUPS_INDEX_SQL);
   await dbPool.query(CREATE_SHOPIFY_ORDERS_TABLE_SQL);
   await dbPool.query(CREATE_SHOPIFY_ORDER_UNIQUES_SQL);
 }
@@ -85,13 +173,66 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
     return;
   }
 
-  if (!shopDomain || order?.id == null) {
+  if (!shopDomain) {
+    return;
+  }
+
+  try {
+    await dbPool.query(UPSERT_MERCHANT_SQL, [shopDomain]);
+    console.log(`MERCHANT UPSERTED shop=${shopDomain}`);
+  } catch (error) {
+    console.error("MERCHANT UPSERT ERROR", error);
+  }
+
+  if (order?.id == null) {
     return;
   }
 
   const orderId = String(order.id);
+  const email =
+    typeof order.email === "string" && order.email.trim()
+      ? order.email.trim().toLowerCase()
+      : "";
   const createdAt = order.created_at || null;
   const totalPrice = order.total_price != null ? String(order.total_price) : null;
+
+  if (!email) {
+    console.log(`LINK SKIPPED no email order_id=${orderId}`);
+  } else {
+    let groupId = null;
+    try {
+      const existingGroupResult = await dbPool.query(SELECT_RECENT_LINK_GROUP_SQL, [email]);
+      if (existingGroupResult.rowCount > 0) {
+        groupId = existingGroupResult.rows[0].id;
+        await dbPool.query(UPDATE_LINK_GROUP_LAST_SEEN_SQL, [groupId]);
+        console.log(`LINK GROUP REUSED group_id=${groupId}`);
+      } else {
+        const createGroupResult = await dbPool.query(INSERT_LINK_GROUP_SQL, [email]);
+        groupId = createGroupResult.rows[0].id;
+        console.log(`LINK GROUP CREATED group_id=${groupId}`);
+      }
+    } catch (error) {
+      console.error("LINK GROUP ERROR", error);
+    }
+
+    if (groupId != null) {
+      try {
+        const linkedOrderInsertResult = await dbPool.query(INSERT_LINKED_ORDER_SQL, [
+          groupId,
+          shopDomain,
+          orderId,
+          email,
+          createdAt
+        ]);
+
+        if (linkedOrderInsertResult.rowCount > 0) {
+          console.log(`LINKED_ORDER INSERTED order_id=${orderId} group_id=${groupId}`);
+        }
+      } catch (error) {
+        console.error("LINKED_ORDER INSERT ERROR", error);
+      }
+    }
+  }
 
   const result = await dbPool.query(INSERT_SHOPIFY_ORDER_SQL, [
     shopDomain,
@@ -183,6 +324,37 @@ export function createApp() {
 
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true, time: new Date().toISOString() });
+  });
+
+  app.get("/api/debug/linked-orders", async (req, res) => {
+    const expectedKey = process.env.SESSION_SECRET || "";
+    const providedKey =
+      typeof req.query.key === "string" ? req.query.key : Array.isArray(req.query.key) ? req.query.key[0] : "";
+
+    if (!expectedKey || providedKey !== expectedKey) {
+      res.status(401).json({ ok: false });
+      return;
+    }
+
+    const requestedEmail =
+      typeof req.query.email === "string"
+        ? req.query.email.trim().toLowerCase()
+        : Array.isArray(req.query.email)
+          ? String(req.query.email[0] || "").trim().toLowerCase()
+          : "";
+
+    if (!requestedEmail || !dbPool) {
+      res.json([]);
+      return;
+    }
+
+    try {
+      const result = await dbPool.query(SELECT_DEBUG_LINKED_ORDERS_BY_EMAIL_SQL, [requestedEmail]);
+      res.json(result.rows);
+    } catch (error) {
+      console.error("DEBUG LINKED_ORDERS ERROR", error);
+      res.status(500).json({ ok: false });
+    }
   });
 
   app.get("/app-config.js", (_req, res) => {
