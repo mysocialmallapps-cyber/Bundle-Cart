@@ -122,46 +122,61 @@ export function createApp() {
   });
 
   app.post("/api/webhooks/orders-create", (req, res) => {
-    const hmacSignature =
-      req.get("X-Shopify-Hmac-Sha256") || req.get("x-shopify-hmac-sha256") || "";
-    const secret = process.env.SHOPIFY_WEBHOOK_SECRET || "";
-
-    if (!isValidShopifyWebhookSignature(req.body, hmacSignature, secret)) {
-      res.status(401).json({ ok: false, error: "Invalid webhook signature" });
-      return;
-    }
-
-    let payload;
     try {
-      payload = JSON.parse(req.body.toString("utf8"));
-    } catch {
-      res.status(400).json({ ok: false, error: "Invalid JSON payload" });
-      return;
+      console.log("WEBHOOK HIT");
+      console.log(
+        "WEBHOOK HEADERS",
+        req.headers["x-shopify-hmac-sha256"] || req.headers["X-Shopify-Hmac-Sha256"],
+        "len",
+        req.body?.length
+      );
+
+      const hmacSignature =
+        req.get("X-Shopify-Hmac-Sha256") || req.get("x-shopify-hmac-sha256") || "";
+      const secret = process.env.SHOPIFY_WEBHOOK_SECRET || "";
+
+      if (!isValidShopifyWebhookSignature(req.body, hmacSignature, secret)) {
+        console.log("WEBHOOK SIG FAIL");
+        res.status(401).json({ ok: false, error: "Invalid webhook signature" });
+        return;
+      }
+      console.log("WEBHOOK SIG OK");
+
+      let payload;
+      try {
+        payload = JSON.parse(req.body.toString("utf8"));
+      } catch {
+        res.status(400).json({ ok: false, error: "Invalid JSON payload" });
+        return;
+      }
+
+      const order = payload?.order || payload || {};
+      const shopDomain =
+        req.get("X-Shopify-Shop-Domain") ||
+        req.get("x-shopify-shop-domain") ||
+        "";
+      const webhookId =
+        req.get("X-Shopify-Webhook-Id") || req.get("x-shopify-webhook-id") || "";
+
+      console.log(
+        `WEBHOOK orders/create received id=${order?.id ?? ""} email=${order?.email ?? ""} created_at=${order?.created_at ?? ""} total_price=${order?.total_price ?? ""} shop=${shopDomain}`
+      );
+
+      res.status(200).json({ ok: true });
+
+      // Persist asynchronously so webhook responses are not delayed.
+      void saveOrderCreateWebhookAsync({
+        shopDomain,
+        webhookId,
+        order,
+        rawPayload: payload
+      }).catch((error) => {
+        console.error("ORDER SAVE ERROR", error?.message || error);
+      });
+    } catch (err) {
+      console.error("WEBHOOK ERROR", err);
+      return res.status(500).json({ ok: false });
     }
-
-    const order = payload?.order || payload || {};
-    const shopDomain =
-      req.get("X-Shopify-Shop-Domain") ||
-      req.get("x-shopify-shop-domain") ||
-      "";
-    const webhookId =
-      req.get("X-Shopify-Webhook-Id") || req.get("x-shopify-webhook-id") || "";
-
-    console.log(
-      `WEBHOOK orders/create received id=${order?.id ?? ""} email=${order?.email ?? ""} created_at=${order?.created_at ?? ""} total_price=${order?.total_price ?? ""} shop=${shopDomain}`
-    );
-
-    res.status(200).json({ ok: true });
-
-    // Persist asynchronously so webhook responses are not delayed.
-    void saveOrderCreateWebhookAsync({
-      shopDomain,
-      webhookId,
-      order,
-      rawPayload: payload
-    }).catch((error) => {
-      console.error("ORDER SAVE ERROR", error?.message || error);
-    });
   });
 
   app.use("/api", express.json());
