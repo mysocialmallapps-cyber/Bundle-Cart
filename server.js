@@ -36,10 +36,16 @@ WHERE webhook_id IS NOT NULL;
 
 const CREATE_MERCHANTS_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS merchants (
-  shop_domain TEXT PRIMARY KEY,
-  installed_at TIMESTAMP DEFAULT NOW(),
-  last_webhook_at TIMESTAMP DEFAULT NOW()
+  id SERIAL PRIMARY KEY,
+  name TEXT,
+  domain TEXT NOT NULL,
+  is_active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMP DEFAULT NOW()
 );
+`;
+
+const CREATE_MERCHANTS_DOMAIN_UNIQUE_INDEX_SQL = `
+CREATE UNIQUE INDEX IF NOT EXISTS merchants_domain_uq ON merchants(domain);
 `;
 
 const CREATE_LINK_GROUPS_TABLE_SQL = `
@@ -91,10 +97,10 @@ RETURNING id;
 `;
 
 const UPSERT_MERCHANT_SQL = `
-INSERT INTO merchants (shop_domain, installed_at, last_webhook_at)
-VALUES ($1, NOW(), NOW())
-ON CONFLICT (shop_domain)
-DO UPDATE SET last_webhook_at = NOW();
+INSERT INTO merchants (domain, name, is_active, created_at)
+VALUES ($1, $1, TRUE, NOW())
+ON CONFLICT (domain)
+DO UPDATE SET is_active = TRUE;
 `;
 
 const SELECT_RECENT_LINK_GROUP_SQL = `
@@ -166,6 +172,7 @@ export async function ensureOrdersTableExists() {
   }
 
   await dbPool.query(CREATE_MERCHANTS_TABLE_SQL);
+  await dbPool.query(CREATE_MERCHANTS_DOMAIN_UNIQUE_INDEX_SQL);
   await dbPool.query(CREATE_LINK_GROUPS_TABLE_SQL);
   await dbPool.query(CREATE_LINKED_ORDERS_TABLE_SQL);
   await dbPool.query(CREATE_LINKED_ORDERS_UNIQUE_INDEX_SQL);
