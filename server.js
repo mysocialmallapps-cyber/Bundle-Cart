@@ -64,6 +64,11 @@ CREATE TABLE IF NOT EXISTS linked_orders (
 );
 `;
 
+const CREATE_LINKED_ORDERS_UNIQUE_INDEX_SQL = `
+CREATE UNIQUE INDEX IF NOT EXISTS linked_orders_shop_domain_order_id_uq
+ON linked_orders (shop_domain, shopify_order_id);
+`;
+
 const CREATE_LINK_GROUPS_INDEX_SQL = `
 CREATE INDEX IF NOT EXISTS link_groups_email_last_seen_idx
 ON link_groups (email, last_seen_at DESC);
@@ -163,6 +168,7 @@ export async function ensureOrdersTableExists() {
   await dbPool.query(CREATE_MERCHANTS_TABLE_SQL);
   await dbPool.query(CREATE_LINK_GROUPS_TABLE_SQL);
   await dbPool.query(CREATE_LINKED_ORDERS_TABLE_SQL);
+  await dbPool.query(CREATE_LINKED_ORDERS_UNIQUE_INDEX_SQL);
   await dbPool.query(CREATE_LINK_GROUPS_INDEX_SQL);
   await dbPool.query(CREATE_SHOPIFY_ORDERS_TABLE_SQL);
   await dbPool.query(CREATE_SHOPIFY_ORDER_UNIQUES_SQL);
@@ -173,21 +179,12 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
     return;
   }
 
-  if (!shopDomain) {
-    return;
-  }
-
-  try {
-    await dbPool.query(UPSERT_MERCHANT_SQL, [shopDomain]);
-    console.log(`MERCHANT UPSERTED shop=${shopDomain}`);
-  } catch (error) {
-    console.error("MERCHANT UPSERT ERROR", error);
-  }
-
   if (order?.id == null) {
     return;
   }
 
+  const normalizedShopDomain =
+    typeof shopDomain === "string" ? shopDomain.trim() : "";
   const orderId = String(order.id);
   const email =
     typeof order.email === "string" && order.email.trim()
@@ -196,46 +193,51 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
   const createdAt = order.created_at || null;
   const totalPrice = order.total_price != null ? String(order.total_price) : null;
 
-  if (!email) {
-    console.log(`LINK SKIPPED no email order_id=${orderId}`);
+  if (!normalizedShopDomain) {
+    console.log("MERCHANT SKIPPED missing shop_domain");
   } else {
-    let groupId = null;
-    try {
-      const existingGroupResult = await dbPool.query(SELECT_RECENT_LINK_GROUP_SQL, [email]);
-      if (existingGroupResult.rowCount > 0) {
-        groupId = existingGroupResult.rows[0].id;
-        await dbPool.query(UPDATE_LINK_GROUP_LAST_SEEN_SQL, [groupId]);
-        console.log(`LINK GROUP REUSED group_id=${groupId}`);
-      } else {
-        const createGroupResult = await dbPool.query(INSERT_LINK_GROUP_SQL, [email]);
-        groupId = createGroupResult.rows[0].id;
-        console.log(`LINK GROUP CREATED group_id=${groupId}`);
-      }
-    } catch (error) {
-      console.error("LINK GROUP ERROR", error);
+    console.log("DB STEP merchants upsert");
+    await dbPool.query(UPSERT_MERCHANT_SQL, [normalizedShopDomain]);
+    console.log("MERCHANT UPSERTED", normalizedShopDomain);
+  }
+
+  let groupId = null;
+  if (!email) {
+    console.log("LINK SKIPPED no email", orderId);
+  } else {
+    console.log("DB STEP link_groups select");
+    const existingGroupResult = await dbPool.query(SELECT_RECENT_LINK_GROUP_SQL, [email]);
+    if (existingGroupResult.rowCount > 0) {
+      groupId = existingGroupResult.rows[0].id;
+      console.log("DB STEP link_groups update");
+      await dbPool.query(UPDATE_LINK_GROUP_LAST_SEEN_SQL, [groupId]);
+      console.log("LINK GROUP REUSED", groupId);
+    } else {
+      console.log("DB STEP link_groups insert");
+      const createGroupResult = await dbPool.query(INSERT_LINK_GROUP_SQL, [email]);
+      groupId = createGroupResult.rows[0].id;
+      console.log("LINK GROUP CREATED", groupId);
     }
 
-    if (groupId != null) {
-      try {
-        const linkedOrderInsertResult = await dbPool.query(INSERT_LINKED_ORDER_SQL, [
-          groupId,
-          shopDomain,
-          orderId,
-          email,
-          createdAt
-        ]);
+    console.log("DB STEP linked_orders insert");
+    const linkedOrderInsertResult = await dbPool.query(INSERT_LINKED_ORDER_SQL, [
+      groupId,
+      normalizedShopDomain,
+      orderId,
+      email,
+      createdAt
+    ]);
 
-        if (linkedOrderInsertResult.rowCount > 0) {
-          console.log(`LINKED_ORDER INSERTED order_id=${orderId} group_id=${groupId}`);
-        }
-      } catch (error) {
-        console.error("LINKED_ORDER INSERT ERROR", error);
-      }
+    if (linkedOrderInsertResult.rowCount > 0) {
+      console.log("LINKED_ORDER INSERTED", orderId, groupId);
+    } else {
+      console.log("LINKED_ORDER DUPLICATE", orderId);
     }
   }
 
+  console.log("DB STEP shopify_orders insert");
   const result = await dbPool.query(INSERT_SHOPIFY_ORDER_SQL, [
-    shopDomain,
+    normalizedShopDomain,
     orderId,
     order.email || null,
     createdAt,
@@ -292,10 +294,12 @@ export function createApp() {
       }
 
       const order = payload?.order || payload || {};
-      const shopDomain =
-        req.get("X-Shopify-Shop-Domain") ||
-        req.get("x-shopify-shop-domain") ||
-        "";
+      const shopDomainHeader =
+        req.headers["x-shopify-shop-domain"] ||
+        req.headers["X-Shopify-Shop-Domain"];
+      const shopDomain = Array.isArray(shopDomainHeader)
+        ? String(shopDomainHeader[0] || "")
+        : String(shopDomainHeader || "");
       const webhookId =
         req.get("X-Shopify-Webhook-Id") || req.get("x-shopify-webhook-id") || "";
 
@@ -306,14 +310,18 @@ export function createApp() {
       res.status(200).json({ ok: true });
 
       // Persist asynchronously so webhook responses are not delayed.
-      void saveOrderCreateWebhookAsync({
-        shopDomain,
-        webhookId,
-        order,
-        rawPayload: payload
-      }).catch((error) => {
-        console.error("ORDER SAVE ERROR", error?.message || error);
-      });
+      void (async () => {
+        try {
+          await saveOrderCreateWebhookAsync({
+            shopDomain,
+            webhookId,
+            order,
+            rawPayload: payload
+          });
+        } catch (err) {
+          console.error("WEBHOOK DB ERROR", err);
+        }
+      })();
     } catch (err) {
       console.error("WEBHOOK ERROR", err);
       return res.status(500).json({ ok: false });
