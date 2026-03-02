@@ -37,10 +37,11 @@ WHERE webhook_id IS NOT NULL;
 const CREATE_MERCHANTS_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS merchants (
   id SERIAL PRIMARY KEY,
+  domain TEXT UNIQUE NOT NULL,
   name TEXT,
-  domain TEXT NOT NULL,
   is_active BOOLEAN DEFAULT TRUE,
-  created_at TIMESTAMP DEFAULT NOW()
+  created_at TIMESTAMP DEFAULT NOW(),
+  last_webhook_at TIMESTAMP
 );
 `;
 
@@ -60,13 +61,12 @@ CREATE TABLE IF NOT EXISTS link_groups (
 const CREATE_LINKED_ORDERS_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS linked_orders (
   id SERIAL PRIMARY KEY,
-  group_id INTEGER NOT NULL REFERENCES link_groups(id) ON DELETE CASCADE,
   shop_domain TEXT NOT NULL,
   shopify_order_id BIGINT NOT NULL,
-  email TEXT NOT NULL,
+  email TEXT,
+  group_id INTEGER REFERENCES link_groups(id) ON DELETE SET NULL,
   created_at TIMESTAMP,
-  inserted_at TIMESTAMP DEFAULT NOW(),
-  UNIQUE (shop_domain, shopify_order_id)
+  inserted_at TIMESTAMP DEFAULT NOW()
 );
 `;
 
@@ -145,6 +145,70 @@ ORDER BY inserted_at DESC
 LIMIT 20;
 `;
 
+const ALTER_MERCHANTS_ADD_DOMAIN_SQL = `
+ALTER TABLE merchants ADD COLUMN IF NOT EXISTS domain TEXT;
+`;
+
+const ALTER_MERCHANTS_ADD_LAST_WEBHOOK_AT_SQL = `
+ALTER TABLE merchants ADD COLUMN IF NOT EXISTS last_webhook_at TIMESTAMP;
+`;
+
+const ALTER_MERCHANTS_ADD_NAME_SQL = `
+ALTER TABLE merchants ADD COLUMN IF NOT EXISTS name TEXT;
+`;
+
+const ALTER_MERCHANTS_ADD_IS_ACTIVE_SQL = `
+ALTER TABLE merchants ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;
+`;
+
+const ALTER_MERCHANTS_ADD_CREATED_AT_SQL = `
+ALTER TABLE merchants ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
+`;
+
+const BACKFILL_MERCHANT_DOMAIN_FROM_SHOP_DOMAIN_SQL = `
+UPDATE merchants
+SET domain = shop_domain
+WHERE domain IS NULL
+  AND shop_domain IS NOT NULL;
+`;
+
+const ALTER_LINK_GROUPS_ADD_EMAIL_SQL = `
+ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS email TEXT;
+`;
+
+const ALTER_LINK_GROUPS_ADD_CREATED_AT_SQL = `
+ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
+`;
+
+const ALTER_LINK_GROUPS_ADD_LAST_SEEN_AT_SQL = `
+ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP DEFAULT NOW();
+`;
+
+const ALTER_LINKED_ORDERS_ADD_GROUP_ID_SQL = `
+ALTER TABLE linked_orders
+ADD COLUMN IF NOT EXISTS group_id INTEGER REFERENCES link_groups(id) ON DELETE SET NULL;
+`;
+
+const ALTER_LINKED_ORDERS_ADD_SHOP_DOMAIN_SQL = `
+ALTER TABLE linked_orders ADD COLUMN IF NOT EXISTS shop_domain TEXT;
+`;
+
+const ALTER_LINKED_ORDERS_ADD_SHOPIFY_ORDER_ID_SQL = `
+ALTER TABLE linked_orders ADD COLUMN IF NOT EXISTS shopify_order_id BIGINT;
+`;
+
+const ALTER_LINKED_ORDERS_ADD_EMAIL_SQL = `
+ALTER TABLE linked_orders ADD COLUMN IF NOT EXISTS email TEXT;
+`;
+
+const ALTER_LINKED_ORDERS_ADD_CREATED_AT_SQL = `
+ALTER TABLE linked_orders ADD COLUMN IF NOT EXISTS created_at TIMESTAMP;
+`;
+
+const ALTER_LINKED_ORDERS_ADD_INSERTED_AT_SQL = `
+ALTER TABLE linked_orders ADD COLUMN IF NOT EXISTS inserted_at TIMESTAMP DEFAULT NOW();
+`;
+
 function timingSafeCompare(left, right) {
   const leftBuffer = Buffer.from(left);
   const rightBuffer = Buffer.from(right);
@@ -165,20 +229,106 @@ export function isValidShopifyWebhookSignature(rawBody, signature, secret) {
   return timingSafeCompare(signature.trim(), expected);
 }
 
+function isFatalDbError(error) {
+  const code = String(error?.code || "");
+  return (
+    code.startsWith("08") ||
+    code === "57P01" ||
+    code === "57P02" ||
+    code === "57P03" ||
+    code === "53300"
+  );
+}
+
+async function runNonCriticalSchemaQuery(sql, label) {
+  try {
+    await dbPool.query(sql);
+  } catch (error) {
+    console.error(`DB SCHEMA NON-CRITICAL ${label}`, error);
+    if (isFatalDbError(error)) {
+      throw error;
+    }
+  }
+}
+
 export async function ensureOrdersTableExists() {
   if (!dbPool) {
     console.warn("DATABASE_URL not set; shopify_orders persistence disabled.");
     return;
   }
 
-  await dbPool.query(CREATE_MERCHANTS_TABLE_SQL);
-  await dbPool.query(CREATE_MERCHANTS_DOMAIN_UNIQUE_INDEX_SQL);
-  await dbPool.query(CREATE_LINK_GROUPS_TABLE_SQL);
-  await dbPool.query(CREATE_LINKED_ORDERS_TABLE_SQL);
-  await dbPool.query(CREATE_LINKED_ORDERS_UNIQUE_INDEX_SQL);
-  await dbPool.query(CREATE_LINK_GROUPS_INDEX_SQL);
   await dbPool.query(CREATE_SHOPIFY_ORDERS_TABLE_SQL);
   await dbPool.query(CREATE_SHOPIFY_ORDER_UNIQUES_SQL);
+}
+
+export async function ensureLinkingTablesExist() {
+  if (!dbPool) {
+    console.warn("DATABASE_URL not set; linking persistence disabled.");
+    return;
+  }
+
+  await dbPool.query(CREATE_MERCHANTS_TABLE_SQL);
+  await runNonCriticalSchemaQuery(ALTER_MERCHANTS_ADD_DOMAIN_SQL, "merchants add domain");
+  await runNonCriticalSchemaQuery(
+    ALTER_MERCHANTS_ADD_LAST_WEBHOOK_AT_SQL,
+    "merchants add last_webhook_at"
+  );
+  await runNonCriticalSchemaQuery(ALTER_MERCHANTS_ADD_NAME_SQL, "merchants add name");
+  await runNonCriticalSchemaQuery(
+    ALTER_MERCHANTS_ADD_IS_ACTIVE_SQL,
+    "merchants add is_active"
+  );
+  await runNonCriticalSchemaQuery(
+    ALTER_MERCHANTS_ADD_CREATED_AT_SQL,
+    "merchants add created_at"
+  );
+  await runNonCriticalSchemaQuery(
+    BACKFILL_MERCHANT_DOMAIN_FROM_SHOP_DOMAIN_SQL,
+    "merchants backfill domain from shop_domain"
+  );
+  await dbPool.query(CREATE_MERCHANTS_DOMAIN_UNIQUE_INDEX_SQL);
+  console.log("DB SCHEMA OK merchants");
+
+  await dbPool.query(CREATE_LINK_GROUPS_TABLE_SQL);
+  await runNonCriticalSchemaQuery(ALTER_LINK_GROUPS_ADD_EMAIL_SQL, "link_groups add email");
+  await runNonCriticalSchemaQuery(
+    ALTER_LINK_GROUPS_ADD_CREATED_AT_SQL,
+    "link_groups add created_at"
+  );
+  await runNonCriticalSchemaQuery(
+    ALTER_LINK_GROUPS_ADD_LAST_SEEN_AT_SQL,
+    "link_groups add last_seen_at"
+  );
+  await dbPool.query(CREATE_LINK_GROUPS_INDEX_SQL);
+  console.log("DB SCHEMA OK link_groups");
+
+  await dbPool.query(CREATE_LINKED_ORDERS_TABLE_SQL);
+  await runNonCriticalSchemaQuery(
+    ALTER_LINKED_ORDERS_ADD_GROUP_ID_SQL,
+    "linked_orders add group_id"
+  );
+  await runNonCriticalSchemaQuery(
+    ALTER_LINKED_ORDERS_ADD_SHOP_DOMAIN_SQL,
+    "linked_orders add shop_domain"
+  );
+  await runNonCriticalSchemaQuery(
+    ALTER_LINKED_ORDERS_ADD_SHOPIFY_ORDER_ID_SQL,
+    "linked_orders add shopify_order_id"
+  );
+  await runNonCriticalSchemaQuery(
+    ALTER_LINKED_ORDERS_ADD_EMAIL_SQL,
+    "linked_orders add email"
+  );
+  await runNonCriticalSchemaQuery(
+    ALTER_LINKED_ORDERS_ADD_CREATED_AT_SQL,
+    "linked_orders add created_at"
+  );
+  await runNonCriticalSchemaQuery(
+    ALTER_LINKED_ORDERS_ADD_INSERTED_AT_SQL,
+    "linked_orders add inserted_at"
+  );
+  await dbPool.query(CREATE_LINKED_ORDERS_UNIQUE_INDEX_SQL);
+  console.log("DB SCHEMA OK linked_orders");
 }
 
 async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPayload }) {
@@ -401,6 +551,7 @@ const isDirectRun =
 
 if (isDirectRun && process.env.NODE_ENV !== "test") {
   ensureOrdersTableExists()
+    .then(() => ensureLinkingTablesExist())
     .catch((error) => {
       console.error("Failed to ensure shopify_orders table", error?.message || error);
     })
