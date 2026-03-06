@@ -739,6 +739,30 @@ export function createApp() {
     return res.status(200).json(BUNDLECART_STATIC_RATE_RESPONSE);
   });
 
+  app.get("/auth", (req, res) => {
+    console.log("AUTH START", req.query.shop || "");
+    const shop = normalizeShopDomain(req.query.shop);
+    if (!shop) {
+      res.status(400).json({ ok: false, error: "Missing shop" });
+      return;
+    }
+
+    const clientId = process.env.SHOPIFY_API_KEY || "";
+    const scope = process.env.SHOPIFY_SCOPES || "read_orders,write_shipping";
+    const redirectUri =
+      process.env.REDIRECT_URL ||
+      `${process.env.APP_URL || "https://bundle-cart.replit.app"}/auth/callback`;
+    const state = crypto.randomBytes(16).toString("hex");
+
+    const authorizeUrl = new URL(`https://${shop}/admin/oauth/authorize`);
+    authorizeUrl.searchParams.set("client_id", clientId);
+    authorizeUrl.searchParams.set("scope", scope);
+    authorizeUrl.searchParams.set("redirect_uri", redirectUri);
+    authorizeUrl.searchParams.set("state", state);
+
+    res.redirect(authorizeUrl.toString());
+  });
+
   app.get("/auth/callback", async (req, res) => {
     console.log("AUTH CALLBACK START");
     const shop = normalizeShopDomain(req.query.shop);
