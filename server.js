@@ -12,16 +12,17 @@ const dbPool = DATABASE_URL ? new Pool({ connectionString: DATABASE_URL }) : nul
 const SHOPIFY_ADMIN_API_VERSION = "2026-01";
 const BUNDLECART_CARRIER_NAME = "BundleCart";
 const BUNDLECART_CALLBACK_URL = "https://bundle-cart.replit.app/api/shipping/rates";
-const BUNDLECART_STATIC_RATE_RESPONSE = {
-  rates: [
-    {
-      service_name: "BundleCart",
-      service_code: "BUNDLECART_TEST",
-      total_price: "995",
-      currency: "USD",
-      description: "BundleCart shipping test"
-    }
-  ]
+const BUNDLECART_PAID_RATE = {
+  service_name: "BundleCart",
+  service_code: "BUNDLECART_PAID",
+  total_price: "995",
+  description: "BundleCart shipping"
+};
+const BUNDLECART_FREE_RATE = {
+  service_name: "BundleCart",
+  service_code: "BUNDLECART_FREE",
+  total_price: "0",
+  description: "BundleCart free shipping"
 };
 
 const CREATE_SHOPIFY_ORDERS_TABLE_SQL = `
@@ -70,7 +71,11 @@ CREATE TABLE IF NOT EXISTS link_groups (
   id SERIAL PRIMARY KEY,
   email TEXT NOT NULL,
   created_at TIMESTAMP DEFAULT NOW(),
-  last_seen_at TIMESTAMP DEFAULT NOW()
+  last_seen_at TIMESTAMP DEFAULT NOW(),
+  active_until TIMESTAMP,
+  address_hash TEXT,
+  bundlecart_paid_at TIMESTAMP,
+  first_paid_order_id BIGINT
 );
 `;
 
@@ -81,6 +86,9 @@ CREATE TABLE IF NOT EXISTS linked_orders (
   shopify_order_id BIGINT NOT NULL,
   email TEXT,
   group_id INTEGER REFERENCES link_groups(id) ON DELETE SET NULL,
+  bundlecart_selected BOOLEAN DEFAULT FALSE,
+  bundlecart_paid BOOLEAN DEFAULT FALSE,
+  address_hash TEXT,
   created_at TIMESTAMP,
   inserted_at TIMESTAMP DEFAULT NOW()
 );
@@ -146,11 +154,65 @@ INSERT INTO linked_orders (
   shop_domain,
   shopify_order_id,
   email,
+  bundlecart_selected,
+  bundlecart_paid,
+  address_hash,
   created_at
 )
-VALUES ($1, $2, $3, $4, $5)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (shop_domain, shopify_order_id) DO NOTHING
 RETURNING id;
+`;
+
+const SELECT_MATCHING_GROUP_FOR_PAID_SQL = `
+SELECT id
+FROM link_groups
+WHERE email = $1
+  AND address_hash = $2
+ORDER BY COALESCE(last_seen_at, created_at) DESC
+LIMIT 1;
+`;
+
+const SELECT_ELIGIBLE_BUNDLECART_GROUP_SQL = `
+SELECT lg.id
+FROM link_groups lg
+WHERE lg.email = $1
+  AND lg.address_hash = $2
+  AND lg.active_until > NOW()
+  AND EXISTS (
+    SELECT 1
+    FROM linked_orders lo
+    WHERE lo.group_id = lg.id
+      AND lo.bundlecart_paid = TRUE
+  )
+ORDER BY lg.active_until DESC
+LIMIT 1;
+`;
+
+const SELECT_ADDRESS_MISMATCH_ACTIVE_GROUP_SQL = `
+SELECT lg.id
+FROM link_groups lg
+WHERE lg.email = $1
+  AND lg.active_until > NOW()
+  AND EXISTS (
+    SELECT 1
+    FROM linked_orders lo
+    WHERE lo.group_id = lg.id
+      AND lo.bundlecart_paid = TRUE
+  )
+  AND (lg.address_hash IS DISTINCT FROM $2)
+ORDER BY lg.active_until DESC
+LIMIT 1;
+`;
+
+const UPDATE_BUNDLECART_PAID_GROUP_SQL = `
+UPDATE link_groups
+SET last_seen_at = NOW(),
+    bundlecart_paid_at = $2,
+    active_until = ($2 + INTERVAL '72 hours'),
+    address_hash = $3,
+    first_paid_order_id = $4
+WHERE id = $1;
 `;
 
 const SELECT_DEBUG_LINKED_ORDERS_BY_EMAIL_SQL = `
@@ -214,6 +276,22 @@ const ALTER_LINK_GROUPS_ADD_LAST_SEEN_AT_SQL = `
 ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP DEFAULT NOW();
 `;
 
+const ALTER_LINK_GROUPS_ADD_ACTIVE_UNTIL_SQL = `
+ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS active_until TIMESTAMP;
+`;
+
+const ALTER_LINK_GROUPS_ADD_ADDRESS_HASH_SQL = `
+ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS address_hash TEXT;
+`;
+
+const ALTER_LINK_GROUPS_ADD_BUNDLECART_PAID_AT_SQL = `
+ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS bundlecart_paid_at TIMESTAMP;
+`;
+
+const ALTER_LINK_GROUPS_ADD_FIRST_PAID_ORDER_ID_SQL = `
+ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS first_paid_order_id BIGINT;
+`;
+
 const ALTER_LINKED_ORDERS_ADD_GROUP_ID_SQL = `
 ALTER TABLE linked_orders
 ADD COLUMN IF NOT EXISTS group_id INTEGER REFERENCES link_groups(id) ON DELETE SET NULL;
@@ -229,6 +307,18 @@ ALTER TABLE linked_orders ADD COLUMN IF NOT EXISTS shopify_order_id BIGINT;
 
 const ALTER_LINKED_ORDERS_ADD_EMAIL_SQL = `
 ALTER TABLE linked_orders ADD COLUMN IF NOT EXISTS email TEXT;
+`;
+
+const ALTER_LINKED_ORDERS_ADD_BUNDLECART_SELECTED_SQL = `
+ALTER TABLE linked_orders ADD COLUMN IF NOT EXISTS bundlecart_selected BOOLEAN DEFAULT FALSE;
+`;
+
+const ALTER_LINKED_ORDERS_ADD_BUNDLECART_PAID_SQL = `
+ALTER TABLE linked_orders ADD COLUMN IF NOT EXISTS bundlecart_paid BOOLEAN DEFAULT FALSE;
+`;
+
+const ALTER_LINKED_ORDERS_ADD_ADDRESS_HASH_SQL = `
+ALTER TABLE linked_orders ADD COLUMN IF NOT EXISTS address_hash TEXT;
 `;
 
 const ALTER_LINKED_ORDERS_ADD_CREATED_AT_SQL = `
@@ -284,6 +374,99 @@ function normalizeShopDomain(input) {
   }
   const withoutProtocol = raw.replace(/^https?:\/\//, "");
   return withoutProtocol.replace(/\/+$/, "");
+}
+
+function normalizeAddressValue(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function buildCanonicalAddress(address) {
+  const input = address && typeof address === "object" ? address : {};
+  const address1 = normalizeAddressValue(input.address1);
+  const address2 = normalizeAddressValue(input.address2);
+  const city = normalizeAddressValue(input.city);
+  const province = normalizeAddressValue(
+    input.province || input.province_code || input.state
+  );
+  const postalCode = normalizeAddressValue(input.zip || input.postal_code);
+  const country = normalizeAddressValue(input.country || input.country_code);
+
+  return {
+    canonical: [address1, address2, city, province, postalCode, country].join("|"),
+    hasRequired: Boolean(address1 && city && postalCode && country)
+  };
+}
+
+function hashAddressCanonical(canonicalAddress) {
+  if (!canonicalAddress) {
+    return "";
+  }
+  return crypto.createHash("sha256").update(canonicalAddress).digest("hex");
+}
+
+function getOrderShippingAddress(order) {
+  if (order?.shipping_address && typeof order.shipping_address === "object") {
+    return order.shipping_address;
+  }
+  return {};
+}
+
+function parsePriceAmount(value) {
+  const amount = Number.parseFloat(String(value ?? ""));
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+function buildBundleCartRateResponse({ eligibleFree, currency }) {
+  const normalizedCurrency = String(currency || "USD").trim().toUpperCase() || "USD";
+  const rate = eligibleFree ? BUNDLECART_FREE_RATE : BUNDLECART_PAID_RATE;
+  return {
+    rates: [
+      {
+        ...rate,
+        currency: normalizedCurrency
+      }
+    ]
+  };
+}
+
+function isBundleCartShippingLine(line) {
+  const title = String(line?.title || "").toLowerCase();
+  const code = String(line?.code || "").toLowerCase();
+  const serviceCode = String(line?.service_code || "").toLowerCase();
+  return (
+    title.includes("bundlecart") ||
+    title.includes("bundle cart") ||
+    code.includes("bundlecart") ||
+    code.includes("bundle_cart") ||
+    serviceCode.includes("bundlecart") ||
+    serviceCode.includes("bundle_cart")
+  );
+}
+
+function extractBundleCartSelection(order) {
+  const shippingLines = Array.isArray(order?.shipping_lines) ? order.shipping_lines : [];
+  const bundleCartLines = shippingLines.filter(isBundleCartShippingLine);
+  if (bundleCartLines.length === 0) {
+    return { selected: false, paid: false, free: false, amount: 0 };
+  }
+
+  const amount = bundleCartLines.reduce((sum, line) => {
+    if (line?.price != null) {
+      return sum + parsePriceAmount(line.price);
+    }
+    const nested = line?.price_set?.shop_money?.amount;
+    return sum + parsePriceAmount(nested);
+  }, 0);
+
+  return {
+    selected: true,
+    paid: amount > 0,
+    free: amount === 0,
+    amount
+  };
 }
 
 async function registerBundleCartCarrierService({ shopDomain, accessToken }) {
@@ -515,6 +698,22 @@ export async function ensureLinkingTablesExist() {
     ALTER_LINK_GROUPS_ADD_LAST_SEEN_AT_SQL,
     "link_groups add last_seen_at"
   );
+  await runNonCriticalSchemaQuery(
+    ALTER_LINK_GROUPS_ADD_ACTIVE_UNTIL_SQL,
+    "link_groups add active_until"
+  );
+  await runNonCriticalSchemaQuery(
+    ALTER_LINK_GROUPS_ADD_ADDRESS_HASH_SQL,
+    "link_groups add address_hash"
+  );
+  await runNonCriticalSchemaQuery(
+    ALTER_LINK_GROUPS_ADD_BUNDLECART_PAID_AT_SQL,
+    "link_groups add bundlecart_paid_at"
+  );
+  await runNonCriticalSchemaQuery(
+    ALTER_LINK_GROUPS_ADD_FIRST_PAID_ORDER_ID_SQL,
+    "link_groups add first_paid_order_id"
+  );
   await dbPool.query(CREATE_LINK_GROUPS_INDEX_SQL);
   console.log("DB SCHEMA OK link_groups");
 
@@ -534,6 +733,18 @@ export async function ensureLinkingTablesExist() {
   await runNonCriticalSchemaQuery(
     ALTER_LINKED_ORDERS_ADD_EMAIL_SQL,
     "linked_orders add email"
+  );
+  await runNonCriticalSchemaQuery(
+    ALTER_LINKED_ORDERS_ADD_BUNDLECART_SELECTED_SQL,
+    "linked_orders add bundlecart_selected"
+  );
+  await runNonCriticalSchemaQuery(
+    ALTER_LINKED_ORDERS_ADD_BUNDLECART_PAID_SQL,
+    "linked_orders add bundlecart_paid"
+  );
+  await runNonCriticalSchemaQuery(
+    ALTER_LINKED_ORDERS_ADD_ADDRESS_HASH_SQL,
+    "linked_orders add address_hash"
   );
   await runNonCriticalSchemaQuery(
     ALTER_LINKED_ORDERS_ADD_CREATED_AT_SQL,
@@ -565,6 +776,11 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
       : "";
   const createdAt = order.created_at || null;
   const totalPrice = order.total_price != null ? String(order.total_price) : null;
+  const paidAtTimestamp = createdAt || new Date().toISOString();
+  const shippingAddress = getOrderShippingAddress(order);
+  const { canonical: canonicalAddress, hasRequired: hasRequiredAddress } = buildCanonicalAddress(shippingAddress);
+  const addressHash = hasRequiredAddress ? hashAddressCanonical(canonicalAddress) : "";
+  const bundleCartSelection = extractBundleCartSelection(order);
 
   if (!normalizedShopDomain) {
     console.log("MERCHANT SKIPPED missing shop_domain");
@@ -574,37 +790,137 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
     console.log("MERCHANT UPSERTED", normalizedShopDomain);
   }
 
-  let groupId = null;
-  if (!email) {
-    console.log("LINK SKIPPED no email", orderId);
-  } else {
-    console.log("DB STEP link_groups select");
-    const existingGroupResult = await dbPool.query(SELECT_RECENT_LINK_GROUP_SQL, [email]);
-    if (existingGroupResult.rowCount > 0) {
-      groupId = existingGroupResult.rows[0].id;
-      console.log("DB STEP link_groups update");
-      await dbPool.query(UPDATE_LINK_GROUP_LAST_SEEN_SQL, [groupId]);
-      console.log("LINK GROUP REUSED", groupId);
-    } else {
-      console.log("DB STEP link_groups insert");
-      const createGroupResult = await dbPool.query(INSERT_LINK_GROUP_SQL, [email]);
-      groupId = createGroupResult.rows[0].id;
-      console.log("LINK GROUP CREATED", groupId);
+  if (bundleCartSelection.selected) {
+    if (bundleCartSelection.paid) {
+      if (!email) {
+        console.log("LINK SKIPPED no email", orderId);
+      } else if (!addressHash) {
+        console.log("BUNDLECART ADDRESS MISMATCH");
+      } else {
+        let groupId = null;
+        console.log("DB STEP link_groups select");
+        const matchingGroupResult = await dbPool.query(SELECT_MATCHING_GROUP_FOR_PAID_SQL, [
+          email,
+          addressHash
+        ]);
+        if (matchingGroupResult.rowCount > 0) {
+          groupId = matchingGroupResult.rows[0].id;
+          console.log("LINK GROUP REUSED", groupId);
+        } else {
+          console.log("DB STEP link_groups insert");
+          const createGroupResult = await dbPool.query(INSERT_LINK_GROUP_SQL, [email]);
+          groupId = createGroupResult.rows[0].id;
+          console.log("LINK GROUP CREATED", groupId);
+        }
+
+        console.log("DB STEP link_groups update");
+        await dbPool.query(UPDATE_BUNDLECART_PAID_GROUP_SQL, [
+          groupId,
+          paidAtTimestamp,
+          addressHash,
+          orderId
+        ]);
+        console.log("BUNDLECART PAID WINDOW STARTED");
+
+        console.log("DB STEP linked_orders insert");
+        const linkedOrderInsertResult = await dbPool.query(INSERT_LINKED_ORDER_SQL, [
+          groupId,
+          normalizedShopDomain,
+          orderId,
+          email,
+          true,
+          true,
+          addressHash,
+          createdAt
+        ]);
+        if (linkedOrderInsertResult.rowCount > 0) {
+          console.log("LINKED_ORDER INSERTED", orderId, groupId);
+        } else {
+          console.log("LINKED_ORDER DUPLICATE", orderId);
+        }
+      }
+    } else if (bundleCartSelection.free) {
+      if (!email) {
+        console.log("LINK SKIPPED no email", orderId);
+        console.log("BUNDLECART FREE ORDER REJECTED");
+      } else if (!addressHash) {
+        console.log("BUNDLECART ADDRESS MISMATCH");
+        console.log("BUNDLECART FREE ORDER REJECTED");
+      } else {
+        console.log("DB STEP link_groups select");
+        const eligibleGroupResult = await dbPool.query(SELECT_ELIGIBLE_BUNDLECART_GROUP_SQL, [
+          email,
+          addressHash
+        ]);
+        if (eligibleGroupResult.rowCount > 0) {
+          const groupId = eligibleGroupResult.rows[0].id;
+          console.log("DB STEP link_groups update");
+          await dbPool.query(UPDATE_LINK_GROUP_LAST_SEEN_SQL, [groupId]);
+          console.log("BUNDLECART FREE ORDER ACCEPTED");
+          console.log("DB STEP linked_orders insert");
+          const linkedOrderInsertResult = await dbPool.query(INSERT_LINKED_ORDER_SQL, [
+            groupId,
+            normalizedShopDomain,
+            orderId,
+            email,
+            true,
+            false,
+            addressHash,
+            createdAt
+          ]);
+          if (linkedOrderInsertResult.rowCount > 0) {
+            console.log("LINKED_ORDER INSERTED", orderId, groupId);
+          } else {
+            console.log("LINKED_ORDER DUPLICATE", orderId);
+          }
+        } else {
+          const mismatchResult = await dbPool.query(SELECT_ADDRESS_MISMATCH_ACTIVE_GROUP_SQL, [
+            email,
+            addressHash
+          ]);
+          if (mismatchResult.rowCount > 0) {
+            console.log("BUNDLECART ADDRESS MISMATCH");
+          }
+          console.log("BUNDLECART FREE ORDER REJECTED");
+        }
+      }
     }
-
-    console.log("DB STEP linked_orders insert");
-    const linkedOrderInsertResult = await dbPool.query(INSERT_LINKED_ORDER_SQL, [
-      groupId,
-      normalizedShopDomain,
-      orderId,
-      email,
-      createdAt
-    ]);
-
-    if (linkedOrderInsertResult.rowCount > 0) {
-      console.log("LINKED_ORDER INSERTED", orderId, groupId);
+  } else {
+    let groupId = null;
+    if (!email) {
+      console.log("LINK SKIPPED no email", orderId);
     } else {
-      console.log("LINKED_ORDER DUPLICATE", orderId);
+      console.log("DB STEP link_groups select");
+      const existingGroupResult = await dbPool.query(SELECT_RECENT_LINK_GROUP_SQL, [email]);
+      if (existingGroupResult.rowCount > 0) {
+        groupId = existingGroupResult.rows[0].id;
+        console.log("DB STEP link_groups update");
+        await dbPool.query(UPDATE_LINK_GROUP_LAST_SEEN_SQL, [groupId]);
+        console.log("LINK GROUP REUSED", groupId);
+      } else {
+        console.log("DB STEP link_groups insert");
+        const createGroupResult = await dbPool.query(INSERT_LINK_GROUP_SQL, [email]);
+        groupId = createGroupResult.rows[0].id;
+        console.log("LINK GROUP CREATED", groupId);
+      }
+
+      console.log("DB STEP linked_orders insert");
+      const linkedOrderInsertResult = await dbPool.query(INSERT_LINKED_ORDER_SQL, [
+        groupId,
+        normalizedShopDomain,
+        orderId,
+        email,
+        false,
+        false,
+        addressHash || null,
+        createdAt
+      ]);
+
+      if (linkedOrderInsertResult.rowCount > 0) {
+        console.log("LINKED_ORDER INSERTED", orderId, groupId);
+      } else {
+        console.log("LINKED_ORDER DUPLICATE", orderId);
+      }
     }
   }
 
@@ -702,41 +1018,84 @@ export function createApp() {
   });
 
   app.post("/api/shipping/rates", express.text({ type: "*/*" }), (req, res) => {
-    try {
-      const shopDomainHeader =
-        req.get("x-shopify-shop-domain") || req.get("X-Shopify-Shop-Domain") || "";
+    const fallbackPaid = () => {
+      return res.status(200).json(
+        buildBundleCartRateResponse({ eligibleFree: false, currency: "USD" })
+      );
+    };
 
+    void (async () => {
       let parsedPayload = {};
-      if (typeof req.body === "string" && req.body.trim()) {
-        try {
-          parsedPayload = JSON.parse(req.body);
-        } catch {
-          parsedPayload = {};
+      try {
+        const shopDomainHeader =
+          req.get("x-shopify-shop-domain") || req.get("X-Shopify-Shop-Domain") || "";
+
+        if (typeof req.body === "string" && req.body.trim()) {
+          try {
+            parsedPayload = JSON.parse(req.body);
+          } catch {
+            parsedPayload = {};
+          }
+        } else if (Buffer.isBuffer(req.body) && req.body.length > 0) {
+          try {
+            parsedPayload = JSON.parse(req.body.toString("utf8"));
+          } catch {
+            parsedPayload = {};
+          }
+        } else if (req.body && typeof req.body === "object") {
+          parsedPayload = req.body;
         }
-      } else if (Buffer.isBuffer(req.body) && req.body.length > 0) {
-        try {
-          parsedPayload = JSON.parse(req.body.toString("utf8"));
-        } catch {
-          parsedPayload = {};
+
+        const keys =
+          parsedPayload && typeof parsedPayload === "object" && !Array.isArray(parsedPayload)
+            ? Object.keys(parsedPayload)
+            : [];
+        console.log("BUNDLECART RATE REQUEST", {
+          keys,
+          shop_domain: normalizeShopDomain(shopDomainHeader)
+        });
+
+        const rate = parsedPayload?.rate && typeof parsedPayload.rate === "object" ? parsedPayload.rate : {};
+        const destination = rate.destination && typeof rate.destination === "object" ? rate.destination : {};
+        const email = normalizeAddressValue(rate.email || destination.email || parsedPayload?.email);
+        const { canonical, hasRequired } = buildCanonicalAddress(destination);
+        const addressHash = hasRequired ? hashAddressCanonical(canonical) : "";
+        const currency = destination.currency || rate.currency || "USD";
+
+        if (!email || !addressHash || !dbPool) {
+          console.log("BUNDLECART NOT ELIGIBLE PAID");
+          return res
+            .status(200)
+            .json(buildBundleCartRateResponse({ eligibleFree: false, currency }));
         }
-      } else if (req.body && typeof req.body === "object") {
-        parsedPayload = req.body;
+
+        const eligibleResult = await dbPool.query(SELECT_ELIGIBLE_BUNDLECART_GROUP_SQL, [
+          email,
+          addressHash
+        ]);
+        if (eligibleResult.rowCount > 0) {
+          console.log("BUNDLECART ELIGIBLE FREE");
+          return res
+            .status(200)
+            .json(buildBundleCartRateResponse({ eligibleFree: true, currency }));
+        }
+
+        const mismatchResult = await dbPool.query(SELECT_ADDRESS_MISMATCH_ACTIVE_GROUP_SQL, [
+          email,
+          addressHash
+        ]);
+        if (mismatchResult.rowCount > 0) {
+          console.log("BUNDLECART ADDRESS MISMATCH");
+        }
+        console.log("BUNDLECART NOT ELIGIBLE PAID");
+        return res
+          .status(200)
+          .json(buildBundleCartRateResponse({ eligibleFree: false, currency }));
+      } catch (error) {
+        console.error("BUNDLECART RATE REQUEST ERROR", error);
+        return fallbackPaid();
       }
-
-      const keys =
-        parsedPayload && typeof parsedPayload === "object" && !Array.isArray(parsedPayload)
-          ? Object.keys(parsedPayload)
-          : [];
-
-      console.log("BUNDLECART RATE REQUEST", {
-        keys,
-        shop_domain: normalizeShopDomain(shopDomainHeader)
-      });
-    } catch (error) {
-      console.error("BUNDLECART RATE REQUEST ERROR", error);
-    }
-
-    return res.status(200).json(BUNDLECART_STATIC_RATE_RESPONSE);
+    })();
   });
 
   app.get("/auth", (req, res) => {
