@@ -9,6 +9,20 @@ const { Pool } = pg;
 
 const DATABASE_URL = process.env.DATABASE_URL || "";
 const dbPool = DATABASE_URL ? new Pool({ connectionString: DATABASE_URL }) : null;
+const SHOPIFY_ADMIN_API_VERSION = "2026-01";
+const BUNDLECART_CARRIER_NAME = "BundleCart";
+const BUNDLECART_CALLBACK_URL = "https://bundle-cart.replit.app/api/shipping/rates";
+const BUNDLECART_STATIC_RATE_RESPONSE = {
+  rates: [
+    {
+      service_name: "BundleCart",
+      service_code: "BUNDLECART_TEST",
+      total_price: "995",
+      currency: "USD",
+      description: "BundleCart shipping test"
+    }
+  ]
+};
 
 const CREATE_SHOPIFY_ORDERS_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS shopify_orders (
@@ -145,6 +159,12 @@ ORDER BY inserted_at DESC
 LIMIT 20;
 `;
 
+const SELECT_MERCHANT_COLUMNS_SQL = `
+SELECT column_name
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = 'merchants';
+`;
+
 const ALTER_MERCHANTS_ADD_DOMAIN_SQL = `
 ALTER TABLE merchants ADD COLUMN IF NOT EXISTS domain TEXT;
 `;
@@ -227,6 +247,136 @@ export function isValidShopifyWebhookSignature(rawBody, signature, secret) {
 
   const expected = crypto.createHmac("sha256", secret).update(rawBody).digest("base64");
   return timingSafeCompare(signature.trim(), expected);
+}
+
+function normalizeShopDomain(input) {
+  const raw = String(input || "").trim().toLowerCase();
+  if (!raw) {
+    return "";
+  }
+  const withoutProtocol = raw.replace(/^https?:\/\//, "");
+  return withoutProtocol.replace(/\/+$/, "");
+}
+
+async function registerBundleCartCarrierService({ shopDomain, accessToken }) {
+  const normalizedShop = normalizeShopDomain(shopDomain);
+  const token = String(accessToken || "").trim();
+
+  if (!normalizedShop || !token) {
+    return;
+  }
+
+  const endpoint = `https://${normalizedShop}/admin/api/${SHOPIFY_ADMIN_API_VERSION}/carrier_services.json`;
+
+  try {
+    const listResponse = await fetch(endpoint, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        "X-Shopify-Access-Token": token
+      }
+    });
+
+    if (!listResponse.ok) {
+      throw new Error(`carrier service list failed: ${listResponse.status}`);
+    }
+
+    let listPayload = {};
+    try {
+      listPayload = await listResponse.json();
+    } catch {
+      listPayload = {};
+    }
+
+    const existingServices = Array.isArray(listPayload?.carrier_services)
+      ? listPayload.carrier_services
+      : [];
+    const alreadyExists = existingServices.some(
+      (service) => String(service?.name || "").trim() === BUNDLECART_CARRIER_NAME
+    );
+
+    if (alreadyExists) {
+      console.log("CARRIER SERVICE EXISTS", normalizedShop);
+      return;
+    }
+
+    const createResponse = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-Shopify-Access-Token": token
+      },
+      body: JSON.stringify({
+        carrier_service: {
+          name: BUNDLECART_CARRIER_NAME,
+          callback_url: BUNDLECART_CALLBACK_URL,
+          service_discovery: true
+        }
+      })
+    });
+
+    if (createResponse.ok) {
+      console.log("CARRIER SERVICE CREATED", normalizedShop);
+      return;
+    }
+
+    let createErrorPayload = "";
+    try {
+      createErrorPayload = await createResponse.text();
+    } catch {
+      createErrorPayload = "";
+    }
+    console.error(
+      "CARRIER SERVICE CREATE ERROR",
+      normalizedShop,
+      createResponse.status,
+      createErrorPayload
+    );
+  } catch (error) {
+    console.error("CARRIER SERVICE CREATE ERROR", normalizedShop, error);
+  }
+}
+
+async function registerCarrierServiceForActiveMerchants() {
+  if (!dbPool) {
+    return;
+  }
+
+  try {
+    const columnsResult = await dbPool.query(SELECT_MERCHANT_COLUMNS_SQL);
+    const columns = new Set(columnsResult.rows.map((row) => row.column_name));
+
+    const domainColumn = columns.has("domain")
+      ? "domain"
+      : columns.has("shop_domain")
+        ? "shop_domain"
+        : "";
+    const accessTokenColumn = columns.has("access_token")
+      ? "access_token"
+      : columns.has("shopify_access_token")
+        ? "shopify_access_token"
+        : columns.has("token")
+          ? "token"
+          : "";
+
+    if (!domainColumn || !accessTokenColumn) {
+      return;
+    }
+
+    const activeFilter = columns.has("is_active") ? " AND is_active = TRUE" : "";
+    const merchantsQuery = `SELECT ${domainColumn} AS shop_domain, ${accessTokenColumn} AS access_token FROM merchants WHERE ${accessTokenColumn} IS NOT NULL AND ${accessTokenColumn} <> ''${activeFilter} LIMIT 200`;
+    const merchantsResult = await dbPool.query(merchantsQuery);
+
+    for (const merchant of merchantsResult.rows) {
+      await registerBundleCartCarrierService({
+        shopDomain: merchant.shop_domain,
+        accessToken: merchant.access_token
+      });
+    }
+  } catch (error) {
+    console.error("CARRIER SERVICE CREATE ERROR", error);
+  }
 }
 
 function isFatalDbError(error) {
@@ -485,6 +635,44 @@ export function createApp() {
     }
   });
 
+  app.post("/api/shipping/rates", express.text({ type: "*/*" }), (req, res) => {
+    try {
+      const shopDomainHeader =
+        req.get("x-shopify-shop-domain") || req.get("X-Shopify-Shop-Domain") || "";
+
+      let parsedPayload = {};
+      if (typeof req.body === "string" && req.body.trim()) {
+        try {
+          parsedPayload = JSON.parse(req.body);
+        } catch {
+          parsedPayload = {};
+        }
+      } else if (Buffer.isBuffer(req.body) && req.body.length > 0) {
+        try {
+          parsedPayload = JSON.parse(req.body.toString("utf8"));
+        } catch {
+          parsedPayload = {};
+        }
+      } else if (req.body && typeof req.body === "object") {
+        parsedPayload = req.body;
+      }
+
+      const keys =
+        parsedPayload && typeof parsedPayload === "object" && !Array.isArray(parsedPayload)
+          ? Object.keys(parsedPayload)
+          : [];
+
+      console.log("BUNDLECART RATE REQUEST", {
+        keys,
+        shop_domain: normalizeShopDomain(shopDomainHeader)
+      });
+    } catch (error) {
+      console.error("BUNDLECART RATE REQUEST ERROR", error);
+    }
+
+    return res.status(200).json(BUNDLECART_STATIC_RATE_RESPONSE);
+  });
+
   app.use("/api", express.json());
 
   app.get("/api/health", (_req, res) => {
@@ -560,6 +748,7 @@ if (isDirectRun && process.env.NODE_ENV !== "test") {
       const PORT = process.env.PORT || 3000;
       app.listen(PORT, "0.0.0.0", () => {
         console.log(`BundleCart server listening on port ${PORT}`);
+        void registerCarrierServiceForActiveMerchants();
       });
     });
 }
