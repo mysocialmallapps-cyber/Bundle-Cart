@@ -710,6 +710,98 @@ export function createApp() {
     }
   });
 
+  app.get("/api/debug/carrier-services", async (_req, res) => {
+    if (!dbPool) {
+      res.json({ merchants: [] });
+      return;
+    }
+
+    try {
+      const columnsResult = await dbPool.query(SELECT_MERCHANT_COLUMNS_SQL);
+      const columns = new Set(columnsResult.rows.map((row) => row.column_name));
+
+      const domainColumn = columns.has("domain")
+        ? "domain"
+        : columns.has("shop_domain")
+          ? "shop_domain"
+          : "";
+      const accessTokenColumn = columns.has("access_token")
+        ? "access_token"
+        : columns.has("shopify_access_token")
+          ? "shopify_access_token"
+          : columns.has("token")
+            ? "token"
+            : "";
+
+      if (!domainColumn || !accessTokenColumn) {
+        res.json({ merchants: [] });
+        return;
+      }
+
+      const activeFilter = columns.has("is_active") ? " AND is_active = TRUE" : "";
+      const merchantsQuery = `SELECT ${domainColumn} AS shop_domain, ${accessTokenColumn} AS access_token FROM merchants WHERE ${accessTokenColumn} IS NOT NULL AND ${accessTokenColumn} <> ''${activeFilter} LIMIT 200`;
+      const merchantsResult = await dbPool.query(merchantsQuery);
+
+      const results = [];
+      for (const merchant of merchantsResult.rows) {
+        const normalizedShop = normalizeShopDomain(merchant.shop_domain);
+        const token = String(merchant.access_token || "").trim();
+        const entry = {
+          shop_domain: normalizedShop,
+          succeeded: false,
+          carrier_service_names: [],
+          callback_urls: []
+        };
+
+        if (!normalizedShop || !token) {
+          console.log("DEBUG CARRIER SERVICES", normalizedShop || "(missing)", 0);
+          results.push(entry);
+          continue;
+        }
+
+        try {
+          const endpoint = `https://${normalizedShop}/admin/api/${SHOPIFY_ADMIN_API_VERSION}/carrier_services.json`;
+          const response = await fetch(endpoint, {
+            method: "GET",
+            headers: {
+              Accept: "application/json",
+              "X-Shopify-Access-Token": token
+            }
+          });
+
+          if (!response.ok) {
+            entry.error = `status_${response.status}`;
+          } else {
+            let payload = {};
+            try {
+              payload = await response.json();
+            } catch {
+              payload = {};
+            }
+            const carrierServices = Array.isArray(payload?.carrier_services)
+              ? payload.carrier_services
+              : [];
+            entry.succeeded = true;
+            entry.carrier_service_names = carrierServices.map((service) => service?.name).filter(Boolean);
+            entry.callback_urls = carrierServices
+              .map((service) => service?.callback_url)
+              .filter(Boolean);
+          }
+        } catch (error) {
+          entry.error = error?.message || "request_failed";
+        }
+
+        console.log("DEBUG CARRIER SERVICES", normalizedShop, entry.carrier_service_names.length);
+        results.push(entry);
+      }
+
+      res.json({ merchants: results });
+    } catch (error) {
+      console.error("DEBUG CARRIER SERVICES ERROR", error);
+      res.status(500).json({ merchants: [] });
+    }
+  });
+
   app.get("/app-config.js", (_req, res) => {
     const appUrl = process.env.APP_URL || "";
     const redirectUrl = process.env.REDIRECT_URL || `${appUrl}/auth/callback`;
