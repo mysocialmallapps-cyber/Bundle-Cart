@@ -55,7 +55,9 @@ CREATE TABLE IF NOT EXISTS merchants (
   name TEXT,
   is_active BOOLEAN DEFAULT TRUE,
   created_at TIMESTAMP DEFAULT NOW(),
-  last_webhook_at TIMESTAMP
+  last_webhook_at TIMESTAMP,
+  access_token TEXT,
+  updated_at TIMESTAMP DEFAULT NOW()
 );
 `;
 
@@ -185,6 +187,14 @@ const ALTER_MERCHANTS_ADD_CREATED_AT_SQL = `
 ALTER TABLE merchants ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
 `;
 
+const ALTER_MERCHANTS_ADD_ACCESS_TOKEN_SQL = `
+ALTER TABLE merchants ADD COLUMN IF NOT EXISTS access_token TEXT;
+`;
+
+const ALTER_MERCHANTS_ADD_UPDATED_AT_SQL = `
+ALTER TABLE merchants ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
+`;
+
 const BACKFILL_MERCHANT_DOMAIN_FROM_SHOP_DOMAIN_SQL = `
 UPDATE merchants
 SET domain = shop_domain
@@ -227,6 +237,24 @@ ALTER TABLE linked_orders ADD COLUMN IF NOT EXISTS created_at TIMESTAMP;
 
 const ALTER_LINKED_ORDERS_ADD_INSERTED_AT_SQL = `
 ALTER TABLE linked_orders ADD COLUMN IF NOT EXISTS inserted_at TIMESTAMP DEFAULT NOW();
+`;
+
+const UPSERT_MERCHANT_TOKEN_SQL = `
+INSERT INTO merchants (name, domain, is_active, access_token, created_at, updated_at)
+VALUES ($1, $1, TRUE, $2, NOW(), NOW())
+ON CONFLICT (domain)
+DO UPDATE SET
+  name = EXCLUDED.name,
+  is_active = TRUE,
+  access_token = EXCLUDED.access_token,
+  updated_at = NOW();
+`;
+
+const SELECT_DEBUG_MERCHANTS_SQL = `
+SELECT domain, is_active, created_at, updated_at, access_token
+FROM merchants
+ORDER BY created_at DESC NULLS LAST
+LIMIT 200;
 `;
 
 function timingSafeCompare(left, right) {
@@ -379,6 +407,36 @@ async function registerCarrierServiceForActiveMerchants() {
   }
 }
 
+async function exchangeShopifyAccessToken({ shop, code }) {
+  const apiKey = process.env.SHOPIFY_API_KEY || "";
+  const apiSecret = process.env.SHOPIFY_API_SECRET || "";
+
+  if (!shop || !code || !apiKey || !apiSecret) {
+    return "";
+  }
+
+  const tokenEndpoint = `https://${shop}/admin/oauth/access_token`;
+  const response = await fetch(tokenEndpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json"
+    },
+    body: JSON.stringify({
+      client_id: apiKey,
+      client_secret: apiSecret,
+      code
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`token_exchange_failed_${response.status}`);
+  }
+
+  const payload = await response.json();
+  return String(payload?.access_token || "");
+}
+
 function isFatalDbError(error) {
   const code = String(error?.code || "");
   return (
@@ -431,6 +489,14 @@ export async function ensureLinkingTablesExist() {
   await runNonCriticalSchemaQuery(
     ALTER_MERCHANTS_ADD_CREATED_AT_SQL,
     "merchants add created_at"
+  );
+  await runNonCriticalSchemaQuery(
+    ALTER_MERCHANTS_ADD_ACCESS_TOKEN_SQL,
+    "merchants add access_token"
+  );
+  await runNonCriticalSchemaQuery(
+    ALTER_MERCHANTS_ADD_UPDATED_AT_SQL,
+    "merchants add updated_at"
   );
   await runNonCriticalSchemaQuery(
     BACKFILL_MERCHANT_DOMAIN_FROM_SHOP_DOMAIN_SQL,
@@ -673,6 +739,44 @@ export function createApp() {
     return res.status(200).json(BUNDLECART_STATIC_RATE_RESPONSE);
   });
 
+  app.get("/auth/callback", async (req, res) => {
+    console.log("AUTH CALLBACK START");
+    const shop = normalizeShopDomain(req.query.shop);
+    const code = typeof req.query.code === "string" ? req.query.code : "";
+    console.log("AUTH CALLBACK SHOP", shop);
+
+    if (!shop || !code) {
+      res.status(400).json({ ok: false, error: "Missing shop or code" });
+      return;
+    }
+
+    let accessToken = "";
+    try {
+      accessToken = await exchangeShopifyAccessToken({ shop, code });
+      if (!accessToken) {
+        throw new Error("empty_access_token");
+      }
+      console.log("AUTH CALLBACK TOKEN RECEIVED");
+    } catch (error) {
+      console.error("AUTH CALLBACK TOKEN EXCHANGE ERROR", error);
+      res.status(502).json({ ok: false, error: "Token exchange failed" });
+      return;
+    }
+
+    console.log("MERCHANT TOKEN SAVE START", shop);
+    try {
+      if (!dbPool) {
+        throw new Error("DATABASE_URL not configured");
+      }
+      await dbPool.query(UPSERT_MERCHANT_TOKEN_SQL, [shop, accessToken]);
+      console.log("MERCHANT TOKEN SAVE OK", shop);
+    } catch (error) {
+      console.error("MERCHANT TOKEN SAVE ERROR", error);
+    }
+
+    res.redirect("/");
+  });
+
   app.use("/api", express.json());
 
   app.get("/api/health", (_req, res) => {
@@ -717,30 +821,9 @@ export function createApp() {
     }
 
     try {
-      const columnsResult = await dbPool.query(SELECT_MERCHANT_COLUMNS_SQL);
-      const columns = new Set(columnsResult.rows.map((row) => row.column_name));
-
-      const domainColumn = columns.has("domain")
-        ? "domain"
-        : columns.has("shop_domain")
-          ? "shop_domain"
-          : "";
-      const accessTokenColumn = columns.has("access_token")
-        ? "access_token"
-        : columns.has("shopify_access_token")
-          ? "shopify_access_token"
-          : columns.has("token")
-            ? "token"
-            : "";
-
-      if (!domainColumn || !accessTokenColumn) {
-        res.json({ merchants: [] });
-        return;
-      }
-
-      const activeFilter = columns.has("is_active") ? " AND is_active = TRUE" : "";
-      const merchantsQuery = `SELECT ${domainColumn} AS shop_domain, ${accessTokenColumn} AS access_token FROM merchants WHERE ${accessTokenColumn} IS NOT NULL AND ${accessTokenColumn} <> ''${activeFilter} LIMIT 200`;
-      const merchantsResult = await dbPool.query(merchantsQuery);
+      const merchantsResult = await dbPool.query(
+        "SELECT domain AS shop_domain, access_token FROM merchants WHERE is_active = TRUE AND access_token IS NOT NULL AND access_token <> '' LIMIT 200"
+      );
 
       const results = [];
       for (const merchant of merchantsResult.rows) {
@@ -798,6 +881,28 @@ export function createApp() {
       res.json({ merchants: results });
     } catch (error) {
       console.error("DEBUG CARRIER SERVICES ERROR", error);
+      res.status(500).json({ merchants: [] });
+    }
+  });
+
+  app.get("/api/debug/merchants", async (_req, res) => {
+    if (!dbPool) {
+      res.json({ merchants: [] });
+      return;
+    }
+
+    try {
+      const result = await dbPool.query(SELECT_DEBUG_MERCHANTS_SQL);
+      const merchants = result.rows.map((row) => ({
+        domain: row.domain,
+        is_active: row.is_active,
+        token_present: Boolean(row.access_token),
+        created_at: row.created_at,
+        updated_at: row.updated_at
+      }));
+      res.json({ merchants });
+    } catch (error) {
+      console.error("DEBUG MERCHANTS ERROR", error);
       res.status(500).json({ merchants: [] });
     }
   });
