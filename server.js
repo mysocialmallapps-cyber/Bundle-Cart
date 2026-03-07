@@ -419,6 +419,14 @@ function parsePriceAmount(value) {
   return Number.isFinite(amount) ? amount : 0;
 }
 
+function safeJsonString(value) {
+  try {
+    return JSON.stringify(value ?? "");
+  } catch {
+    return String(value ?? "");
+  }
+}
+
 function buildBundleCartRateResponse({ eligibleFree, currency }) {
   const normalizedCurrency = String(currency || "USD").trim().toUpperCase() || "USD";
   const rate = eligibleFree ? BUNDLECART_FREE_RATE : BUNDLECART_PAID_RATE;
@@ -433,33 +441,58 @@ function buildBundleCartRateResponse({ eligibleFree, currency }) {
 }
 
 function isBundleCartShippingLine(line) {
-  const title = String(line?.title || "").toLowerCase();
-  const code = String(line?.code || "").toLowerCase();
-  const serviceCode = String(line?.service_code || "").toLowerCase();
-  return (
-    title.includes("bundlecart") ||
-    title.includes("bundle cart") ||
-    code.includes("bundlecart") ||
-    code.includes("bundle_cart") ||
-    serviceCode.includes("bundlecart") ||
-    serviceCode.includes("bundle_cart")
+  const fields = [
+    line?.title,
+    line?.code,
+    line?.service_code,
+    line?.source,
+    line?.carrier_identifier,
+    line?.description,
+    line?.requested_fulfillment_service_id,
+    safeJsonString(line?.custom_attributes)
+  ];
+  return fields.some((field) =>
+    String(field || "").toLowerCase().includes("bundlecart")
   );
+}
+
+function extractShippingLineAmount(line) {
+  const candidates = [
+    line?.price,
+    line?.discounted_price,
+    line?.amount,
+    line?.shop_money?.amount,
+    line?.presentment_money?.amount,
+    line?.price_set?.shop_money?.amount,
+    line?.price_set?.presentment_money?.amount
+  ];
+  const numericCandidates = candidates
+    .map((value) => parsePriceAmount(value))
+    .filter((value) => Number.isFinite(value));
+  if (numericCandidates.length === 0) {
+    return 0;
+  }
+  return Math.max(...numericCandidates);
 }
 
 function extractBundleCartSelection(order) {
   const shippingLines = Array.isArray(order?.shipping_lines) ? order.shipping_lines : [];
   const bundleCartLines = shippingLines.filter(isBundleCartShippingLine);
   if (bundleCartLines.length === 0) {
+    console.log("BUNDLECART SHIPPING NOT MATCHED");
     return { selected: false, paid: false, free: false, amount: 0 };
   }
 
-  const amount = bundleCartLines.reduce((sum, line) => {
-    if (line?.price != null) {
-      return sum + parsePriceAmount(line.price);
-    }
-    const nested = line?.price_set?.shop_money?.amount;
-    return sum + parsePriceAmount(nested);
-  }, 0);
+  const amount = bundleCartLines.reduce(
+    (sum, line) => sum + extractShippingLineAmount(line),
+    0
+  );
+  console.log("BUNDLECART SHIPPING MATCHED", safeJsonString(bundleCartLines[0]));
+  if (amount > 0) {
+    console.log("BUNDLECART PAID DETECTED", amount);
+  } else {
+    console.log("BUNDLECART FREE DETECTED", amount);
+  }
 
   return {
     selected: true,
@@ -983,6 +1016,11 @@ export function createApp() {
       }
 
       const order = payload?.order || payload || {};
+      console.log("BUNDLECART SHIPPING RAW", JSON.stringify(order.shipping_lines || []));
+      console.log(
+        "BUNDLECART TOTAL SHIPPING LINES",
+        (order.shipping_lines || []).length
+      );
       const shopDomainHeader =
         req.headers["x-shopify-shop-domain"] ||
         req.headers["X-Shopify-Shop-Domain"];
