@@ -130,7 +130,7 @@ DO UPDATE SET is_active = TRUE;
 const SELECT_RECENT_LINK_GROUP_SQL = `
 SELECT id
 FROM link_groups
-WHERE email = $1
+WHERE email = $1::text
   AND last_seen_at >= NOW() - INTERVAL '72 hours'
 ORDER BY last_seen_at DESC
 LIMIT 1;
@@ -139,12 +139,12 @@ LIMIT 1;
 const UPDATE_LINK_GROUP_LAST_SEEN_SQL = `
 UPDATE link_groups
 SET last_seen_at = NOW()
-WHERE id = $1;
+WHERE id = $1::integer;
 `;
 
 const INSERT_LINK_GROUP_SQL = `
 INSERT INTO link_groups (email, created_at, last_seen_at)
-VALUES ($1, NOW(), NOW())
+VALUES ($1::text, NOW(), NOW())
 RETURNING id;
 `;
 
@@ -159,7 +159,16 @@ INSERT INTO linked_orders (
   address_hash,
   created_at
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+VALUES (
+  $1::integer,
+  $2::text,
+  $3::bigint,
+  $4::text,
+  $5::boolean,
+  $6::boolean,
+  $7::text,
+  $8::timestamp
+)
 ON CONFLICT (shop_domain, shopify_order_id) DO NOTHING
 RETURNING id;
 `;
@@ -167,8 +176,8 @@ RETURNING id;
 const SELECT_MATCHING_GROUP_FOR_PAID_SQL = `
 SELECT id
 FROM link_groups
-WHERE email = $1
-  AND address_hash = $2
+WHERE email = $1::text
+  AND address_hash = $2::text
 ORDER BY COALESCE(last_seen_at, created_at) DESC
 LIMIT 1;
 `;
@@ -176,8 +185,8 @@ LIMIT 1;
 const SELECT_ELIGIBLE_BUNDLECART_GROUP_SQL = `
 SELECT lg.id
 FROM link_groups lg
-WHERE lg.email = $1
-  AND lg.address_hash = $2
+WHERE lg.email = $1::text
+  AND lg.address_hash = $2::text
   AND lg.active_until > NOW()
   AND EXISTS (
     SELECT 1
@@ -192,7 +201,7 @@ LIMIT 1;
 const SELECT_ADDRESS_MISMATCH_ACTIVE_GROUP_SQL = `
 SELECT lg.id
 FROM link_groups lg
-WHERE lg.email = $1
+WHERE lg.email = $1::text
   AND lg.active_until > NOW()
   AND EXISTS (
     SELECT 1
@@ -200,7 +209,7 @@ WHERE lg.email = $1
     WHERE lo.group_id = lg.id
       AND lo.bundlecart_paid = TRUE
   )
-  AND (lg.address_hash IS DISTINCT FROM $2)
+  AND (lg.address_hash IS DISTINCT FROM $2::text)
 ORDER BY lg.active_until DESC
 LIMIT 1;
 `;
@@ -208,11 +217,11 @@ LIMIT 1;
 const UPDATE_BUNDLECART_PAID_GROUP_SQL = `
 UPDATE link_groups
 SET last_seen_at = NOW(),
-    bundlecart_paid_at = $2,
-    active_until = ($2 + INTERVAL '72 hours'),
-    address_hash = $3,
-    first_paid_order_id = $4
-WHERE id = $1;
+    bundlecart_paid_at = $2::timestamp,
+    active_until = ($2::timestamp + INTERVAL '72 hours'),
+    address_hash = $3::text,
+    first_paid_order_id = $4::bigint
+WHERE id = $1::integer;
 `;
 
 const SELECT_DEBUG_LINKED_ORDERS_BY_EMAIL_SQL = `
@@ -847,6 +856,12 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
         }
 
         console.log("DB STEP link_groups update");
+        console.log("BUNDLECART PAID WINDOW PARAMS", {
+          groupId,
+          paidAt: paidAtTimestamp,
+          addressHash,
+          orderId
+        });
         await dbPool.query(UPDATE_BUNDLECART_PAID_GROUP_SQL, [
           groupId,
           paidAtTimestamp,
