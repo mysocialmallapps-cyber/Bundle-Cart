@@ -198,6 +198,21 @@ ORDER BY lg.active_until DESC
 LIMIT 1;
 `;
 
+const SELECT_ELIGIBLE_BUNDLECART_GROUP_BY_ADDRESS_SQL = `
+SELECT lg.id, lg.email
+FROM link_groups lg
+WHERE lg.address_hash = $1::text
+  AND lg.active_until > NOW()
+  AND EXISTS (
+    SELECT 1
+    FROM linked_orders lo
+    WHERE lo.group_id = lg.id
+      AND lo.bundlecart_paid = TRUE
+  )
+ORDER BY lg.active_until DESC
+LIMIT 1;
+`;
+
 const SELECT_ADDRESS_MISMATCH_ACTIVE_GROUP_SQL = `
 SELECT lg.id
 FROM link_groups lg
@@ -960,14 +975,46 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
             console.log("LINKED_ORDER DUPLICATE", orderId);
           }
         } else {
-          const mismatchResult = await dbPool.query(SELECT_ADDRESS_MISMATCH_ACTIVE_GROUP_SQL, [
-            email,
-            addressHash
-          ]);
-          if (mismatchResult.rowCount > 0) {
-            console.log("BUNDLECART ADDRESS MISMATCH");
+          const addressOnlyEligibleResult = await dbPool.query(
+            SELECT_ELIGIBLE_BUNDLECART_GROUP_BY_ADDRESS_SQL,
+            [addressHash]
+          );
+
+          if (addressOnlyEligibleResult.rowCount > 0) {
+            const groupId = addressOnlyEligibleResult.rows[0].id;
+            const groupEmail = String(addressOnlyEligibleResult.rows[0].email || "");
+            if (groupEmail && groupEmail !== email) {
+              console.log("BUNDLECART EMAIL DIFFERENCE ON FREE ORDER");
+            }
+            console.log("DB STEP link_groups update");
+            await dbPool.query(UPDATE_LINK_GROUP_LAST_SEEN_SQL, [groupId]);
+            console.log("BUNDLECART FREE ORDER ACCEPTED");
+            console.log("DB STEP linked_orders insert");
+            const linkedOrderInsertResult = await dbPool.query(INSERT_LINKED_ORDER_SQL, [
+              groupId,
+              normalizedShopDomain,
+              orderId,
+              email,
+              true,
+              false,
+              addressHash,
+              createdAt
+            ]);
+            if (linkedOrderInsertResult.rowCount > 0) {
+              console.log("LINKED_ORDER INSERTED", orderId, groupId);
+            } else {
+              console.log("LINKED_ORDER DUPLICATE", orderId);
+            }
+          } else {
+            const mismatchResult = await dbPool.query(SELECT_ADDRESS_MISMATCH_ACTIVE_GROUP_SQL, [
+              email,
+              addressHash
+            ]);
+            if (mismatchResult.rowCount > 0) {
+              console.log("BUNDLECART ADDRESS MISMATCH");
+            }
+            console.log("BUNDLECART FREE ORDER REJECTED");
           }
-          console.log("BUNDLECART FREE ORDER REJECTED");
         }
       }
     }
@@ -1158,20 +1205,21 @@ export function createApp() {
         console.log("BUNDLECART RATE ADDRESS INPUT", JSON.stringify(destination || {}));
         console.log("BUNDLECART RATE ADDRESS HASH", addressHash || "");
         console.log("BUNDLECART RATE ELIGIBILITY QUERY PARAMS", { email, addressHash });
+        console.log("BUNDLECART ADDRESS-ONLY ELIGIBILITY", { addressHash });
 
-        if (!email || !addressHash || !dbPool) {
-          console.log("BUNDLECART NOT ELIGIBLE PAID");
+        if (!addressHash || !dbPool) {
+          console.log("BUNDLECART NOT ELIGIBLE PAID BY ADDRESS");
           return res
             .status(200)
             .json(buildBundleCartRateResponse({ eligibleFree: false, currency }));
         }
 
-        const eligibleResult = await dbPool.query(SELECT_ELIGIBLE_BUNDLECART_GROUP_SQL, [
-          email,
-          addressHash
-        ]);
+        const eligibleResult = await dbPool.query(
+          SELECT_ELIGIBLE_BUNDLECART_GROUP_BY_ADDRESS_SQL,
+          [addressHash]
+        );
         if (eligibleResult.rowCount > 0) {
-          console.log("BUNDLECART ELIGIBLE FREE");
+          console.log("BUNDLECART ELIGIBLE FREE BY ADDRESS");
           return res
             .status(200)
             .json(buildBundleCartRateResponse({ eligibleFree: true, currency }));
@@ -1195,7 +1243,7 @@ export function createApp() {
         if (mismatchResult.rowCount > 0) {
           console.log("BUNDLECART ADDRESS MISMATCH");
         }
-        console.log("BUNDLECART NOT ELIGIBLE PAID");
+        console.log("BUNDLECART NOT ELIGIBLE PAID BY ADDRESS");
         return res
           .status(200)
           .json(buildBundleCartRateResponse({ eligibleFree: false, currency }));
