@@ -24,6 +24,53 @@ const BUNDLECART_FREE_RATE = {
   total_price: "0",
   description: "BundleCart free shipping"
 };
+const BUNDLECART_REGION_WAREHOUSES = {
+  US: {
+    name: "BundleCart US Warehouse",
+    address1: "21-38 44th Road",
+    city: "Long Island City",
+    province: "NY",
+    zip: "11101",
+    country: "United States",
+    country_code: "US"
+  },
+  UK: {
+    name: "BundleCart UK Warehouse",
+    address1: "1 Placeholder Street",
+    city: "London",
+    province: "",
+    zip: "SW1A 1AA",
+    country: "United Kingdom",
+    country_code: "GB"
+  },
+  EU: {
+    name: "BundleCart EU Warehouse",
+    address1: "10 Placeholder Avenue",
+    city: "Amsterdam",
+    province: "",
+    zip: "1012 AB",
+    country: "Netherlands",
+    country_code: "NL"
+  },
+  ASIA: {
+    name: "BundleCart Asia Warehouse",
+    address1: "88 Placeholder Road",
+    city: "Singapore",
+    province: "",
+    zip: "049213",
+    country: "Singapore",
+    country_code: "SG"
+  },
+  SA: {
+    name: "BundleCart SA Warehouse",
+    address1: "100 Placeholder Blvd",
+    city: "Sao Paulo",
+    province: "",
+    zip: "01000-000",
+    country: "Brazil",
+    country_code: "BR"
+  }
+};
 
 const CREATE_SHOPIFY_ORDERS_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS shopify_orders (
@@ -58,7 +105,12 @@ CREATE TABLE IF NOT EXISTS merchants (
   created_at TIMESTAMP DEFAULT NOW(),
   last_webhook_at TIMESTAMP,
   access_token TEXT,
-  updated_at TIMESTAMP DEFAULT NOW()
+  updated_at TIMESTAMP DEFAULT NOW(),
+  merchant_country_code TEXT,
+  merchant_region TEXT,
+  warehouse_region TEXT,
+  warehouse_address_json JSONB,
+  location_id BIGINT
 );
 `;
 
@@ -75,7 +127,10 @@ CREATE TABLE IF NOT EXISTS link_groups (
   active_until TIMESTAMP,
   address_hash TEXT,
   bundlecart_paid_at TIMESTAMP,
-  first_paid_order_id BIGINT
+  first_paid_order_id BIGINT,
+  customer_address_json JSONB,
+  warehouse_region TEXT,
+  warehouse_address_json JSONB
 );
 `;
 
@@ -89,6 +144,8 @@ CREATE TABLE IF NOT EXISTS linked_orders (
   bundlecart_selected BOOLEAN DEFAULT FALSE,
   bundlecart_paid BOOLEAN DEFAULT FALSE,
   address_hash TEXT,
+  warehouse_region TEXT,
+  warehouse_address_json JSONB,
   created_at TIMESTAMP,
   inserted_at TIMESTAMP DEFAULT NOW()
 );
@@ -125,6 +182,24 @@ INSERT INTO merchants (domain, name, is_active, created_at)
 VALUES ($1, $1, TRUE, NOW())
 ON CONFLICT (domain)
 DO UPDATE SET is_active = TRUE;
+`;
+
+const UPDATE_MERCHANT_REGION_ASSIGNMENT_SQL = `
+UPDATE merchants
+SET merchant_country_code = $1::text,
+    merchant_region = $2::text,
+    warehouse_region = $3::text,
+    warehouse_address_json = $4::jsonb,
+    location_id = $5::bigint,
+    updated_at = NOW()
+WHERE domain = $6::text;
+`;
+
+const SELECT_MERCHANT_WAREHOUSE_SQL = `
+SELECT warehouse_region, warehouse_address_json
+FROM merchants
+WHERE domain = $1::text
+LIMIT 1;
 `;
 
 const SELECT_RECENT_LINK_GROUP_SQL = `
@@ -248,6 +323,22 @@ SET last_seen_at = NOW(),
 WHERE id = $1::integer;
 `;
 
+const UPDATE_LINK_GROUP_METADATA_SQL = `
+UPDATE link_groups
+SET customer_address_json = $2::jsonb,
+    warehouse_region = $3::text,
+    warehouse_address_json = $4::jsonb
+WHERE id = $1::integer;
+`;
+
+const UPDATE_LINKED_ORDER_METADATA_SQL = `
+UPDATE linked_orders
+SET warehouse_region = $3::text,
+    warehouse_address_json = $4::jsonb
+WHERE shop_domain = $1::text
+  AND shopify_order_id = $2::bigint;
+`;
+
 const SELECT_DEBUG_LINKED_ORDERS_BY_EMAIL_SQL = `
 SELECT id, group_id, shop_domain, shopify_order_id, email, created_at, inserted_at
 FROM linked_orders
@@ -290,6 +381,26 @@ const ALTER_MERCHANTS_ADD_UPDATED_AT_SQL = `
 ALTER TABLE merchants ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
 `;
 
+const ALTER_MERCHANTS_ADD_MERCHANT_COUNTRY_CODE_SQL = `
+ALTER TABLE merchants ADD COLUMN IF NOT EXISTS merchant_country_code TEXT;
+`;
+
+const ALTER_MERCHANTS_ADD_MERCHANT_REGION_SQL = `
+ALTER TABLE merchants ADD COLUMN IF NOT EXISTS merchant_region TEXT;
+`;
+
+const ALTER_MERCHANTS_ADD_WAREHOUSE_REGION_SQL = `
+ALTER TABLE merchants ADD COLUMN IF NOT EXISTS warehouse_region TEXT;
+`;
+
+const ALTER_MERCHANTS_ADD_WAREHOUSE_ADDRESS_JSON_SQL = `
+ALTER TABLE merchants ADD COLUMN IF NOT EXISTS warehouse_address_json JSONB;
+`;
+
+const ALTER_MERCHANTS_ADD_LOCATION_ID_SQL = `
+ALTER TABLE merchants ADD COLUMN IF NOT EXISTS location_id BIGINT;
+`;
+
 const BACKFILL_MERCHANT_DOMAIN_FROM_SHOP_DOMAIN_SQL = `
 UPDATE merchants
 SET domain = shop_domain
@@ -325,6 +436,18 @@ const ALTER_LINK_GROUPS_ADD_FIRST_PAID_ORDER_ID_SQL = `
 ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS first_paid_order_id BIGINT;
 `;
 
+const ALTER_LINK_GROUPS_ADD_CUSTOMER_ADDRESS_JSON_SQL = `
+ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS customer_address_json JSONB;
+`;
+
+const ALTER_LINK_GROUPS_ADD_WAREHOUSE_REGION_SQL = `
+ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS warehouse_region TEXT;
+`;
+
+const ALTER_LINK_GROUPS_ADD_WAREHOUSE_ADDRESS_JSON_SQL = `
+ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS warehouse_address_json JSONB;
+`;
+
 const ALTER_LINKED_ORDERS_ADD_GROUP_ID_SQL = `
 ALTER TABLE linked_orders
 ADD COLUMN IF NOT EXISTS group_id INTEGER REFERENCES link_groups(id) ON DELETE SET NULL;
@@ -352,6 +475,14 @@ ALTER TABLE linked_orders ADD COLUMN IF NOT EXISTS bundlecart_paid BOOLEAN DEFAU
 
 const ALTER_LINKED_ORDERS_ADD_ADDRESS_HASH_SQL = `
 ALTER TABLE linked_orders ADD COLUMN IF NOT EXISTS address_hash TEXT;
+`;
+
+const ALTER_LINKED_ORDERS_ADD_WAREHOUSE_REGION_SQL = `
+ALTER TABLE linked_orders ADD COLUMN IF NOT EXISTS warehouse_region TEXT;
+`;
+
+const ALTER_LINKED_ORDERS_ADD_WAREHOUSE_ADDRESS_JSON_SQL = `
+ALTER TABLE linked_orders ADD COLUMN IF NOT EXISTS warehouse_address_json JSONB;
 `;
 
 const ALTER_LINKED_ORDERS_ADD_CREATED_AT_SQL = `
@@ -427,6 +558,77 @@ const PROVINCE_CODE_NORMALIZATION = {
   ca: "ca"
 };
 
+const COUNTRY_NAME_TO_CODE = {
+  "united states": "US",
+  usa: "US",
+  us: "US",
+  "united kingdom": "GB",
+  uk: "GB",
+  "great britain": "GB",
+  singapore: "SG",
+  brazil: "BR",
+  netherlands: "NL",
+  canada: "CA",
+  mexico: "MX"
+};
+
+const REGION_US_CODES = new Set(["US", "CA", "MX"]);
+const REGION_UK_CODES = new Set(["GB"]);
+const REGION_EU_CODES = new Set([
+  "AT",
+  "BE",
+  "BG",
+  "HR",
+  "CY",
+  "CZ",
+  "DK",
+  "EE",
+  "FI",
+  "FR",
+  "DE",
+  "GR",
+  "HU",
+  "IE",
+  "IT",
+  "LV",
+  "LT",
+  "LU",
+  "MT",
+  "NL",
+  "PL",
+  "PT",
+  "RO",
+  "SK",
+  "SI",
+  "ES",
+  "SE"
+]);
+const REGION_ASIA_CODES = new Set([
+  "SG",
+  "JP",
+  "HK",
+  "CN",
+  "KR",
+  "IN",
+  "TH",
+  "MY",
+  "ID",
+  "VN",
+  "PH"
+]);
+const REGION_SA_CODES = new Set([
+  "BR",
+  "AR",
+  "CL",
+  "CO",
+  "PE",
+  "UY",
+  "PY",
+  "BO",
+  "EC",
+  "VE"
+]);
+
 function normalizeCountryCode(value) {
   const normalized = normalizeAddressValue(value);
   if (!normalized) {
@@ -441,6 +643,40 @@ function normalizeProvinceCode(value) {
     return "";
   }
   return PROVINCE_CODE_NORMALIZATION[normalized] || normalized;
+}
+
+function normalizeCountryCodeToIso(value) {
+  const normalized = normalizeAddressValue(value);
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.length === 2) {
+    return normalized.toUpperCase();
+  }
+  return COUNTRY_NAME_TO_CODE[normalized] || "";
+}
+
+function mapCountryCodeToRegion(countryCodeInput) {
+  const countryCode = String(countryCodeInput || "").trim().toUpperCase();
+  if (!countryCode) {
+    return "US";
+  }
+  if (REGION_US_CODES.has(countryCode)) {
+    return "US";
+  }
+  if (REGION_UK_CODES.has(countryCode)) {
+    return "UK";
+  }
+  if (REGION_EU_CODES.has(countryCode)) {
+    return "EU";
+  }
+  if (REGION_ASIA_CODES.has(countryCode)) {
+    return "ASIA";
+  }
+  if (REGION_SA_CODES.has(countryCode)) {
+    return "SA";
+  }
+  return "US";
 }
 
 function buildCanonicalAddress(address) {
@@ -558,6 +794,81 @@ function extractBundleCartSelection(order) {
     free: amount === 0,
     amount
   };
+}
+
+function getWarehouseForRegion(region) {
+  return BUNDLECART_REGION_WAREHOUSES[region] || BUNDLECART_REGION_WAREHOUSES.US;
+}
+
+async function detectMerchantRegion(shopDomain, accessToken) {
+  const normalizedShop = normalizeShopDomain(shopDomain);
+  const token = String(accessToken || "").trim();
+  if (!normalizedShop || !token) {
+    return { countryCode: "US", region: "US", locationId: null };
+  }
+
+  const headers = {
+    Accept: "application/json",
+    "X-Shopify-Access-Token": token
+  };
+
+  try {
+    const locationsResponse = await fetch(
+      `https://${normalizedShop}/admin/api/${SHOPIFY_ADMIN_API_VERSION}/locations.json`,
+      { method: "GET", headers }
+    );
+    if (locationsResponse.ok) {
+      const locationsPayload = await locationsResponse.json();
+      const locations = Array.isArray(locationsPayload?.locations)
+        ? locationsPayload.locations
+        : [];
+      const location = locations.find(
+        (item) =>
+          item &&
+          item.active !== false &&
+          (item.country_code || item.country || item.province_code || item.province)
+      );
+      if (location) {
+        const countryCode = normalizeCountryCodeToIso(
+          location.country_code || location.country
+        );
+        const region = mapCountryCodeToRegion(countryCode);
+        return {
+          countryCode: countryCode || "US",
+          region,
+          locationId:
+            location.id != null
+              ? Number.parseInt(String(location.id), 10) || null
+              : null
+        };
+      }
+    }
+  } catch (error) {
+    console.error("MERCHANT REGION DETECT ERROR", normalizedShop, error);
+  }
+
+  try {
+    const shopResponse = await fetch(
+      `https://${normalizedShop}/admin/api/${SHOPIFY_ADMIN_API_VERSION}/shop.json`,
+      { method: "GET", headers }
+    );
+    if (shopResponse.ok) {
+      const shopPayload = await shopResponse.json();
+      const countryCode = normalizeCountryCodeToIso(
+        shopPayload?.shop?.country_code || shopPayload?.shop?.country
+      );
+      const region = mapCountryCodeToRegion(countryCode);
+      return {
+        countryCode: countryCode || "US",
+        region,
+        locationId: null
+      };
+    }
+  } catch (error) {
+    console.error("MERCHANT REGION DETECT ERROR", normalizedShop, error);
+  }
+
+  return { countryCode: "US", region: "US", locationId: null };
 }
 
 async function registerBundleCartCarrierService({ shopDomain, accessToken }) {
@@ -804,6 +1115,26 @@ export async function ensureLinkingTablesExist() {
     "merchants add updated_at"
   );
   await runNonCriticalSchemaQuery(
+    ALTER_MERCHANTS_ADD_MERCHANT_COUNTRY_CODE_SQL,
+    "merchants add merchant_country_code"
+  );
+  await runNonCriticalSchemaQuery(
+    ALTER_MERCHANTS_ADD_MERCHANT_REGION_SQL,
+    "merchants add merchant_region"
+  );
+  await runNonCriticalSchemaQuery(
+    ALTER_MERCHANTS_ADD_WAREHOUSE_REGION_SQL,
+    "merchants add warehouse_region"
+  );
+  await runNonCriticalSchemaQuery(
+    ALTER_MERCHANTS_ADD_WAREHOUSE_ADDRESS_JSON_SQL,
+    "merchants add warehouse_address_json"
+  );
+  await runNonCriticalSchemaQuery(
+    ALTER_MERCHANTS_ADD_LOCATION_ID_SQL,
+    "merchants add location_id"
+  );
+  await runNonCriticalSchemaQuery(
     BACKFILL_MERCHANT_DOMAIN_FROM_SHOP_DOMAIN_SQL,
     "merchants backfill domain from shop_domain"
   );
@@ -836,6 +1167,18 @@ export async function ensureLinkingTablesExist() {
     ALTER_LINK_GROUPS_ADD_FIRST_PAID_ORDER_ID_SQL,
     "link_groups add first_paid_order_id"
   );
+  await runNonCriticalSchemaQuery(
+    ALTER_LINK_GROUPS_ADD_CUSTOMER_ADDRESS_JSON_SQL,
+    "link_groups add customer_address_json"
+  );
+  await runNonCriticalSchemaQuery(
+    ALTER_LINK_GROUPS_ADD_WAREHOUSE_REGION_SQL,
+    "link_groups add warehouse_region"
+  );
+  await runNonCriticalSchemaQuery(
+    ALTER_LINK_GROUPS_ADD_WAREHOUSE_ADDRESS_JSON_SQL,
+    "link_groups add warehouse_address_json"
+  );
   await dbPool.query(CREATE_LINK_GROUPS_INDEX_SQL);
   console.log("DB SCHEMA OK link_groups");
 
@@ -867,6 +1210,14 @@ export async function ensureLinkingTablesExist() {
   await runNonCriticalSchemaQuery(
     ALTER_LINKED_ORDERS_ADD_ADDRESS_HASH_SQL,
     "linked_orders add address_hash"
+  );
+  await runNonCriticalSchemaQuery(
+    ALTER_LINKED_ORDERS_ADD_WAREHOUSE_REGION_SQL,
+    "linked_orders add warehouse_region"
+  );
+  await runNonCriticalSchemaQuery(
+    ALTER_LINKED_ORDERS_ADD_WAREHOUSE_ADDRESS_JSON_SQL,
+    "linked_orders add warehouse_address_json"
   );
   await runNonCriticalSchemaQuery(
     ALTER_LINKED_ORDERS_ADD_CREATED_AT_SQL,
@@ -907,6 +1258,8 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
   console.log("BUNDLECART WEBHOOK EMAIL", email || "");
   console.log("BUNDLECART WEBHOOK ADDRESS INPUT", JSON.stringify(shippingAddress || {}));
   console.log("BUNDLECART WEBHOOK ADDRESS HASH", addressHash || "");
+  let warehouseRegion = "US";
+  let warehouseAddress = getWarehouseForRegion("US");
 
   if (!normalizedShopDomain) {
     console.log("MERCHANT SKIPPED missing shop_domain");
@@ -914,9 +1267,36 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
     console.log("DB STEP merchants upsert");
     await dbPool.query(UPSERT_MERCHANT_SQL, [normalizedShopDomain]);
     console.log("MERCHANT UPSERTED", normalizedShopDomain);
+    try {
+      const merchantWarehouseResult = await dbPool.query(SELECT_MERCHANT_WAREHOUSE_SQL, [
+        normalizedShopDomain
+      ]);
+      if (merchantWarehouseResult.rowCount > 0) {
+        const row = merchantWarehouseResult.rows[0];
+        const dbRegion = String(row?.warehouse_region || "").toUpperCase();
+        if (dbRegion) {
+          warehouseRegion = dbRegion;
+        }
+        if (row?.warehouse_address_json && typeof row.warehouse_address_json === "object") {
+          warehouseAddress = row.warehouse_address_json;
+        } else if (typeof row?.warehouse_address_json === "string" && row.warehouse_address_json.trim()) {
+          try {
+            warehouseAddress = JSON.parse(row.warehouse_address_json);
+          } catch {
+            warehouseAddress = getWarehouseForRegion(warehouseRegion);
+          }
+        } else {
+          warehouseAddress = getWarehouseForRegion(warehouseRegion);
+        }
+      }
+    } catch (error) {
+      console.error("MERCHANT WAREHOUSE LOAD ERROR", normalizedShopDomain, error);
+    }
   }
 
   if (bundleCartSelection.selected) {
+    console.log("BUNDLECART WAREHOUSE ASSIGNED", normalizedShopDomain, warehouseRegion);
+    console.log("BUNDLECART WAREHOUSE ADDRESS", safeJsonString(warehouseAddress));
     if (bundleCartSelection.paid) {
       if (!email) {
         console.log("LINK SKIPPED no email", orderId);
@@ -952,6 +1332,13 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
           addressHash,
           orderId
         ]);
+        await dbPool.query(UPDATE_LINK_GROUP_METADATA_SQL, [
+          groupId,
+          JSON.stringify(shippingAddress || {}),
+          warehouseRegion,
+          JSON.stringify(warehouseAddress || {})
+        ]);
+        console.log("BUNDLECART CUSTOMER ADDRESS STORED");
         console.log("BUNDLECART PAID WINDOW STARTED");
 
         console.log("DB STEP linked_orders insert");
@@ -970,6 +1357,12 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
         } else {
           console.log("LINKED_ORDER DUPLICATE", orderId);
         }
+        await dbPool.query(UPDATE_LINKED_ORDER_METADATA_SQL, [
+          normalizedShopDomain,
+          orderId,
+          warehouseRegion,
+          JSON.stringify(warehouseAddress || {})
+        ]);
       }
     } else if (bundleCartSelection.free) {
       if (!email) {
@@ -988,6 +1381,13 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
           const groupId = eligibleGroupResult.rows[0].id;
           console.log("DB STEP link_groups update");
           await dbPool.query(UPDATE_LINK_GROUP_LAST_SEEN_SQL, [groupId]);
+          await dbPool.query(UPDATE_LINK_GROUP_METADATA_SQL, [
+            groupId,
+            JSON.stringify(shippingAddress || {}),
+            warehouseRegion,
+            JSON.stringify(warehouseAddress || {})
+          ]);
+          console.log("BUNDLECART CUSTOMER ADDRESS STORED");
           console.log("BUNDLECART FREE ORDER ACCEPTED");
           console.log("DB STEP linked_orders insert");
           const linkedOrderInsertResult = await dbPool.query(INSERT_LINKED_ORDER_SQL, [
@@ -1005,6 +1405,12 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
           } else {
             console.log("LINKED_ORDER DUPLICATE", orderId);
           }
+          await dbPool.query(UPDATE_LINKED_ORDER_METADATA_SQL, [
+            normalizedShopDomain,
+            orderId,
+            warehouseRegion,
+            JSON.stringify(warehouseAddress || {})
+          ]);
         } else {
           const addressOnlyEligibleResult = await dbPool.query(
             SELECT_ELIGIBLE_BUNDLECART_GROUP_BY_ADDRESS_SQL,
@@ -1019,6 +1425,13 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
             }
             console.log("DB STEP link_groups update");
             await dbPool.query(UPDATE_LINK_GROUP_LAST_SEEN_SQL, [groupId]);
+            await dbPool.query(UPDATE_LINK_GROUP_METADATA_SQL, [
+              groupId,
+              JSON.stringify(shippingAddress || {}),
+              warehouseRegion,
+              JSON.stringify(warehouseAddress || {})
+            ]);
+            console.log("BUNDLECART CUSTOMER ADDRESS STORED");
             console.log("BUNDLECART FREE ORDER ACCEPTED");
             console.log("DB STEP linked_orders insert");
             const linkedOrderInsertResult = await dbPool.query(INSERT_LINKED_ORDER_SQL, [
@@ -1036,6 +1449,12 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
             } else {
               console.log("LINKED_ORDER DUPLICATE", orderId);
             }
+            await dbPool.query(UPDATE_LINKED_ORDER_METADATA_SQL, [
+              normalizedShopDomain,
+              orderId,
+              warehouseRegion,
+              JSON.stringify(warehouseAddress || {})
+            ]);
           } else {
             const mismatchResult = await dbPool.query(SELECT_ADDRESS_MISMATCH_ACTIVE_GROUP_SQL, [
               email,
@@ -1340,6 +1759,30 @@ export function createApp() {
       }
       await dbPool.query(UPSERT_MERCHANT_TOKEN_SQL, [shop, accessToken]);
       console.log("MERCHANT TOKEN SAVE OK", shop);
+
+      try {
+        const regionDetection = await detectMerchantRegion(shop, accessToken);
+        const detectedRegion = regionDetection.region || "US";
+        const detectedCountryCode = regionDetection.countryCode || "US";
+        const warehouseAddress = getWarehouseForRegion(detectedRegion);
+        await dbPool.query(UPDATE_MERCHANT_REGION_ASSIGNMENT_SQL, [
+          detectedCountryCode,
+          detectedRegion,
+          detectedRegion,
+          JSON.stringify(warehouseAddress),
+          regionDetection.locationId,
+          shop
+        ]);
+        console.log(
+          "MERCHANT REGION DETECTED",
+          shop,
+          detectedCountryCode,
+          detectedRegion
+        );
+        console.log("MERCHANT WAREHOUSE ASSIGNED", shop, detectedRegion);
+      } catch (error) {
+        console.error("MERCHANT REGION DETECT ERROR", shop, error);
+      }
 
       try {
         await registerCarrierServiceForShop(shop, accessToken);
