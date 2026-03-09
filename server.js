@@ -401,16 +401,41 @@ function normalizeAddressValue(value) {
     .replace(/\s+/g, " ");
 }
 
+const COUNTRY_CODE_NORMALIZATION = {
+  "united states": "us",
+  usa: "us",
+  us: "us"
+};
+
+const PROVINCE_CODE_NORMALIZATION = {
+  california: "ca",
+  ca: "ca"
+};
+
+function normalizeCountryCode(value) {
+  const normalized = normalizeAddressValue(value);
+  if (!normalized) {
+    return "";
+  }
+  return COUNTRY_CODE_NORMALIZATION[normalized] || normalized;
+}
+
+function normalizeProvinceCode(value) {
+  const normalized = normalizeAddressValue(value);
+  if (!normalized) {
+    return "";
+  }
+  return PROVINCE_CODE_NORMALIZATION[normalized] || normalized;
+}
+
 function buildCanonicalAddress(address) {
   const input = address && typeof address === "object" ? address : {};
   const address1 = normalizeAddressValue(input.address1);
   const address2 = normalizeAddressValue(input.address2);
   const city = normalizeAddressValue(input.city);
-  const province = normalizeAddressValue(
-    input.province || input.province_code || input.state
-  );
+  const province = normalizeProvinceCode(input.province_code || input.province);
   const postalCode = normalizeAddressValue(input.zip || input.postal_code);
-  const country = normalizeAddressValue(input.country || input.country_code);
+  const country = normalizeCountryCode(input.country_code || input.country);
 
   return {
     canonical: [address1, address2, city, province, postalCode, country].join("|"),
@@ -831,6 +856,7 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
   const shippingAddress = getOrderShippingAddress(order);
   const { canonical: canonicalAddress, hasRequired: hasRequiredAddress } = buildCanonicalAddress(shippingAddress);
   const addressHash = hasRequiredAddress ? hashAddressCanonical(canonicalAddress) : "";
+  console.log("BUNDLECART WEBHOOK CANONICAL ADDRESS", canonicalAddress);
   const bundleCartSelection = extractBundleCartSelection(order);
   console.log("BUNDLECART WEBHOOK EMAIL", email || "");
   console.log("BUNDLECART WEBHOOK ADDRESS INPUT", JSON.stringify(shippingAddress || {}));
@@ -1126,6 +1152,7 @@ export function createApp() {
         const email = normalizeAddressValue(rate.email || destination.email || parsedPayload?.email);
         const { canonical, hasRequired } = buildCanonicalAddress(destination);
         const addressHash = hasRequired ? hashAddressCanonical(canonical) : "";
+        console.log("BUNDLECART RATE CANONICAL ADDRESS", canonical);
         const currency = destination.currency || rate.currency || "USD";
         console.log("BUNDLECART RATE EMAIL", email || "");
         console.log("BUNDLECART RATE ADDRESS INPUT", JSON.stringify(destination || {}));
