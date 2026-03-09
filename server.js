@@ -640,6 +640,40 @@ async function registerBundleCartCarrierService({ shopDomain, accessToken }) {
   }
 }
 
+async function registerCarrierServiceForShop(shopDomain, accessToken) {
+  const normalizedShop = normalizeShopDomain(shopDomain);
+  if (!normalizedShop || !String(accessToken || "").trim()) {
+    return;
+  }
+  console.log("REGISTER CARRIER SERVICE", normalizedShop);
+  await registerBundleCartCarrierService({
+    shopDomain: normalizedShop,
+    accessToken
+  });
+}
+
+async function findMerchantAuthByShop(shopDomain) {
+  const normalizedShop = normalizeShopDomain(shopDomain);
+  if (!dbPool || !normalizedShop) {
+    return { exists: false, tokenPresent: false };
+  }
+
+  try {
+    const result = await dbPool.query(
+      "SELECT domain, access_token FROM merchants WHERE domain = $1::text LIMIT 1",
+      [normalizedShop]
+    );
+    if (result.rowCount === 0) {
+      return { exists: false, tokenPresent: false };
+    }
+    const token = String(result.rows[0]?.access_token || "").trim();
+    return { exists: true, tokenPresent: Boolean(token) };
+  } catch (error) {
+    console.error("APP ROOT AUTH LOOKUP ERROR", normalizedShop, error);
+    return { exists: false, tokenPresent: false };
+  }
+}
+
 async function registerCarrierServiceForActiveMerchants() {
   if (!dbPool) {
     return;
@@ -671,10 +705,7 @@ async function registerCarrierServiceForActiveMerchants() {
     const merchantsResult = await dbPool.query(merchantsQuery);
 
     for (const merchant of merchantsResult.rows) {
-      await registerBundleCartCarrierService({
-        shopDomain: merchant.shop_domain,
-        accessToken: merchant.access_token
-      });
+      await registerCarrierServiceForShop(merchant.shop_domain, merchant.access_token);
     }
   } catch (error) {
     console.error("CARRIER SERVICE CREATE ERROR", error);
@@ -1309,6 +1340,12 @@ export function createApp() {
       }
       await dbPool.query(UPSERT_MERCHANT_TOKEN_SQL, [shop, accessToken]);
       console.log("MERCHANT TOKEN SAVE OK", shop);
+
+      try {
+        await registerCarrierServiceForShop(shop, accessToken);
+      } catch (error) {
+        console.error("CARRIER SERVICE CREATE ERROR", shop, error);
+      }
     } catch (error) {
       console.error("MERCHANT TOKEN SAVE ERROR", error);
     }
@@ -1457,7 +1494,21 @@ export function createApp() {
     res.type("application/javascript").send(`window.__BUNDLECART_CONFIG__ = ${config};`);
   });
 
-  app.get("/", (_req, res) => {
+  app.get("/", async (req, res) => {
+    const shop = normalizeShopDomain(req.query.shop);
+    if (!shop) {
+      res.status(200).send("ok");
+      return;
+    }
+
+    const merchantAuth = await findMerchantAuthByShop(shop);
+    if (!merchantAuth.exists || !merchantAuth.tokenPresent) {
+      console.log("APP ROOT AUTH REDIRECT", shop);
+      res.redirect(`/auth?shop=${encodeURIComponent(shop)}`);
+      return;
+    }
+
+    console.log("APP ROOT AUTHORIZED", shop);
     res.status(200).send("ok");
   });
 
