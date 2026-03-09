@@ -214,6 +214,15 @@ ORDER BY lg.active_until DESC
 LIMIT 1;
 `;
 
+const SELECT_ACTIVE_GROUPS_FOR_EMAIL_DEBUG_SQL = `
+SELECT id, email, address_hash, active_until, bundlecart_paid_at, first_paid_order_id
+FROM link_groups
+WHERE email = $1::text
+  AND active_until > NOW()
+ORDER BY active_until DESC
+LIMIT 20;
+`;
+
 const UPDATE_BUNDLECART_PAID_GROUP_SQL = `
 UPDATE link_groups
 SET last_seen_at = NOW(),
@@ -823,6 +832,9 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
   const { canonical: canonicalAddress, hasRequired: hasRequiredAddress } = buildCanonicalAddress(shippingAddress);
   const addressHash = hasRequiredAddress ? hashAddressCanonical(canonicalAddress) : "";
   const bundleCartSelection = extractBundleCartSelection(order);
+  console.log("BUNDLECART WEBHOOK EMAIL", email || "");
+  console.log("BUNDLECART WEBHOOK ADDRESS INPUT", JSON.stringify(shippingAddress || {}));
+  console.log("BUNDLECART WEBHOOK ADDRESS HASH", addressHash || "");
 
   if (!normalizedShopDomain) {
     console.log("MERCHANT SKIPPED missing shop_domain");
@@ -1110,10 +1122,15 @@ export function createApp() {
 
         const rate = parsedPayload?.rate && typeof parsedPayload.rate === "object" ? parsedPayload.rate : {};
         const destination = rate.destination && typeof rate.destination === "object" ? rate.destination : {};
+        console.log("BUNDLECART RATE RAW", JSON.stringify(rate || {}));
         const email = normalizeAddressValue(rate.email || destination.email || parsedPayload?.email);
         const { canonical, hasRequired } = buildCanonicalAddress(destination);
         const addressHash = hasRequired ? hashAddressCanonical(canonical) : "";
         const currency = destination.currency || rate.currency || "USD";
+        console.log("BUNDLECART RATE EMAIL", email || "");
+        console.log("BUNDLECART RATE ADDRESS INPUT", JSON.stringify(destination || {}));
+        console.log("BUNDLECART RATE ADDRESS HASH", addressHash || "");
+        console.log("BUNDLECART RATE ELIGIBILITY QUERY PARAMS", { email, addressHash });
 
         if (!email || !addressHash || !dbPool) {
           console.log("BUNDLECART NOT ELIGIBLE PAID");
@@ -1131,6 +1148,17 @@ export function createApp() {
           return res
             .status(200)
             .json(buildBundleCartRateResponse({ eligibleFree: true, currency }));
+        }
+
+        const activeByEmailDebug = await dbPool.query(SELECT_ACTIVE_GROUPS_FOR_EMAIL_DEBUG_SQL, [
+          email
+        ]);
+        console.log("BUNDLECART ACTIVE GROUPS FOR EMAIL", activeByEmailDebug.rows);
+        if (
+          activeByEmailDebug.rowCount > 0 &&
+          activeByEmailDebug.rows.some((row) => String(row.address_hash || "") !== addressHash)
+        ) {
+          console.log("BUNDLECART HASH MISMATCH STORED VS RATE");
         }
 
         const mismatchResult = await dbPool.query(SELECT_ADDRESS_MISMATCH_ACTIVE_GROUP_SQL, [
