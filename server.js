@@ -1038,6 +1038,46 @@ async function registerCarrierServiceForShop(shopDomain, accessToken) {
   });
 }
 
+async function checkShopifyWriteOrdersScope(shopDomain, accessToken) {
+  const normalizedShop = normalizeShopDomain(shopDomain);
+  const token = String(accessToken || "").trim();
+  if (!normalizedShop || !token) {
+    return false;
+  }
+
+  console.log("SHOPIFY SCOPES CHECK START", normalizedShop);
+  try {
+    const response = await fetch(`https://${normalizedShop}/admin/oauth/access_scopes.json`, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        "X-Shopify-Access-Token": token
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`scope_check_failed_${response.status}`);
+    }
+
+    const payload = await response.json();
+    const scopes = Array.isArray(payload?.access_scopes)
+      ? payload.access_scopes
+          .map((scope) => String(scope?.handle || "").trim())
+          .filter(Boolean)
+      : [];
+
+    console.log("SHOPIFY SCOPES CHECK RESULT", normalizedShop, scopes);
+    const hasWriteOrders = scopes.includes("write_orders");
+    if (!hasWriteOrders) {
+      console.log("SHOPIFY MISSING REQUIRED SCOPE", normalizedShop, "write_orders");
+    }
+    return hasWriteOrders;
+  } catch (error) {
+    console.error("SHOPIFY SCOPES CHECK ERROR", normalizedShop, error);
+    return false;
+  }
+}
+
 async function findMerchantAuthByShop(shopDomain) {
   const normalizedShop = normalizeShopDomain(shopDomain);
   if (!dbPool || !normalizedShop) {
@@ -1605,6 +1645,18 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
         orderId,
         error
       );
+      const rewriteErrorMessage = String(error?.message || error || "").toLowerCase();
+      if (
+        rewriteErrorMessage.includes("status_403") &&
+        rewriteErrorMessage.includes("write_orders")
+      ) {
+        console.error(
+          "BUNDLECART ORDER ADDRESS REWRITE BLOCKED BY MISSING SCOPE",
+          normalizedShopDomain,
+          orderId,
+          "write_orders"
+        );
+      }
     }
   }
 
@@ -1860,6 +1912,7 @@ export function createApp() {
       }
       await dbPool.query(UPSERT_MERCHANT_TOKEN_SQL, [shop, accessToken]);
       console.log("MERCHANT TOKEN SAVE OK", shop);
+      await checkShopifyWriteOrdersScope(shop, accessToken);
 
       try {
         const regionDetection = await detectMerchantRegion(shop, accessToken);
