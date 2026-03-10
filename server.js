@@ -184,11 +184,12 @@ ON CONFLICT (domain)
 DO UPDATE SET
   is_active = TRUE,
   name = COALESCE(merchants.name, EXCLUDED.name),
+  access_token = COALESCE(NULLIF(EXCLUDED.access_token, ''), merchants.access_token),
   updated_at = NOW(),
-  merchant_country_code = merchants.merchant_country_code,
-  merchant_region = merchants.merchant_region,
-  warehouse_region = merchants.warehouse_region,
-  warehouse_address_json = merchants.warehouse_address_json;
+  merchant_country_code = COALESCE(EXCLUDED.merchant_country_code, merchants.merchant_country_code),
+  merchant_region = COALESCE(EXCLUDED.merchant_region, merchants.merchant_region),
+  warehouse_region = COALESCE(EXCLUDED.warehouse_region, merchants.warehouse_region),
+  warehouse_address_json = COALESCE(EXCLUDED.warehouse_address_json, merchants.warehouse_address_json);
 `;
 
 const UPDATE_MERCHANT_REGION_ASSIGNMENT_SQL = `
@@ -1337,6 +1338,11 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
     warehouse_region: warehouseRegion || "",
     warehouse_address_present: hasWarehouseAddress
   });
+  console.log(
+    "BUNDLECART REWRITE TOKEN STATUS",
+    normalizedShopDomain,
+    hasAccessToken
+  );
 
   if (bundleCartSelection.selected) {
     runtimeWarehouseAssigned =
