@@ -178,10 +178,17 @@ RETURNING id;
 `;
 
 const UPSERT_MERCHANT_SQL = `
-INSERT INTO merchants (domain, name, is_active, created_at)
-VALUES ($1, $1, TRUE, NOW())
+INSERT INTO merchants (domain, name, is_active, created_at, updated_at)
+VALUES ($1, $1, TRUE, NOW(), NOW())
 ON CONFLICT (domain)
-DO UPDATE SET is_active = TRUE;
+DO UPDATE SET
+  is_active = TRUE,
+  name = COALESCE(merchants.name, EXCLUDED.name),
+  updated_at = NOW(),
+  merchant_country_code = merchants.merchant_country_code,
+  merchant_region = merchants.merchant_region,
+  warehouse_region = merchants.warehouse_region,
+  warehouse_address_json = merchants.warehouse_address_json;
 `;
 
 const UPDATE_MERCHANT_REGION_ASSIGNMENT_SQL = `
@@ -1279,6 +1286,7 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
   console.log("BUNDLECART WEBHOOK ADDRESS HASH", addressHash || "");
   let warehouseRegion = "US";
   let warehouseAddress = getWarehouseForRegion("US");
+  let runtimeWarehouseAssigned = false;
   let merchantFound = false;
   let merchantDomain = "";
   let hasWarehouseAddress = false;
@@ -1331,6 +1339,8 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
   });
 
   if (bundleCartSelection.selected) {
+    runtimeWarehouseAssigned =
+      Boolean(warehouseAddress) && typeof warehouseAddress === "object";
     console.log("BUNDLECART WAREHOUSE ASSIGNED", normalizedShopDomain, warehouseRegion);
     console.log("BUNDLECART WAREHOUSE ADDRESS", safeJsonString(warehouseAddress));
     if (bundleCartSelection.paid) {
@@ -1543,6 +1553,18 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
     }
   }
 
+  const hasWarehouseAddressFromRuntime =
+    runtimeWarehouseAssigned &&
+    Boolean(warehouseAddress) &&
+    typeof warehouseAddress === "object";
+  const hasWarehouseAddressFromRuntimeOrMerchant =
+    hasWarehouseAddressFromRuntime || hasWarehouseAddress;
+  const rewriteWarehouseAddress = hasWarehouseAddressFromRuntime
+    ? warehouseAddress
+    : hasWarehouseAddress
+      ? warehouseAddress
+      : null;
+
   console.log(
     "BUNDLECART REWRITE CHECK START",
     normalizedShopDomain,
@@ -1553,12 +1575,25 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
     bundlecartPaid: bundleCartSelection.paid,
     shopDomain: normalizedShopDomain,
     orderId,
-    hasWarehouseAddress,
+    hasWarehouseAddress: hasWarehouseAddressFromRuntimeOrMerchant,
     hasAccessToken,
     merchantFound
   });
 
-  if (bundleCartSelection.selected && hasWarehouseAddress && hasAccessToken) {
+  if (bundleCartSelection.selected && hasWarehouseAddressFromRuntimeOrMerchant && hasAccessToken) {
+    if (hasWarehouseAddressFromRuntime) {
+      console.log(
+        "BUNDLECART REWRITE USING RUNTIME WAREHOUSE",
+        normalizedShopDomain,
+        orderId
+      );
+    } else {
+      console.log(
+        "BUNDLECART REWRITE USING MERCHANT WAREHOUSE FALLBACK",
+        normalizedShopDomain,
+        orderId
+      );
+    }
     console.log(
       "BUNDLECART ORDER ADDRESS REWRITE INVOKE",
       normalizedShopDomain,
@@ -1574,7 +1609,7 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
         normalizedShopDomain,
         merchantAccessToken,
         orderId,
-        warehouseAddress
+        rewriteWarehouseAddress
       );
       console.log(
         "BUNDLECART ORDER ADDRESS REWRITE SUCCESS",
