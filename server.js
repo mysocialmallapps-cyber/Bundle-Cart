@@ -196,7 +196,7 @@ WHERE domain = $6::text;
 `;
 
 const SELECT_MERCHANT_WAREHOUSE_SQL = `
-SELECT warehouse_region, warehouse_address_json
+SELECT warehouse_region, warehouse_address_json, access_token
 FROM merchants
 WHERE domain = $1::text
 LIMIT 1;
@@ -878,6 +878,66 @@ async function detectMerchantRegion(shopDomain, accessToken) {
   return { countryCode: "US", region: "US", locationId: null };
 }
 
+async function updateOrderShippingAddressToWarehouse(
+  shopDomain,
+  accessToken,
+  shopifyOrderId,
+  warehouseAddress
+) {
+  const normalizedShop = normalizeShopDomain(shopDomain);
+  const token = String(accessToken || "").trim();
+  const orderId = String(shopifyOrderId || "").trim();
+
+  if (!normalizedShop || !token || !orderId || !warehouseAddress) {
+    throw new Error("missing_rewrite_parameters");
+  }
+
+  const countryCode =
+    normalizeCountryCodeToIso(warehouseAddress.country_code || warehouseAddress.country) || "";
+  const parsedOrderId = Number.parseInt(orderId, 10);
+  const orderReference = Number.isFinite(parsedOrderId) ? parsedOrderId : orderId;
+
+  const endpoint = `https://${normalizedShop}/admin/api/${SHOPIFY_ADMIN_API_VERSION}/orders/${orderId}.json`;
+  const payload = {
+    order: {
+      id: orderReference,
+      shipping_address: {
+        first_name: "BundleCart",
+        last_name: "Warehouse",
+        company: warehouseAddress.name || "BundleCart Warehouse",
+        address1: warehouseAddress.address1 || "",
+        address2: warehouseAddress.address2 || "",
+        city: warehouseAddress.city || "",
+        province: warehouseAddress.province || "",
+        zip: warehouseAddress.zip || "",
+        country: warehouseAddress.country || "",
+        country_code: countryCode,
+        phone: warehouseAddress.phone || ""
+      }
+    }
+  };
+
+  const response = await fetch(endpoint, {
+    method: "PUT",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "X-Shopify-Access-Token": token
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    let details = "";
+    try {
+      details = await response.text();
+    } catch {
+      details = "";
+    }
+    throw new Error(`status_${response.status} ${details}`.trim());
+  }
+}
+
 async function registerBundleCartCarrierService({ shopDomain, accessToken }) {
   const normalizedShop = normalizeShopDomain(shopDomain);
   const token = String(accessToken || "").trim();
@@ -1219,6 +1279,8 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
   console.log("BUNDLECART WEBHOOK ADDRESS HASH", addressHash || "");
   let warehouseRegion = "US";
   let warehouseAddress = getWarehouseForRegion("US");
+  let warehouseAddressFromMerchant = false;
+  let merchantAccessToken = "";
 
   if (!normalizedShopDomain) {
     console.log("MERCHANT SKIPPED missing shop_domain");
@@ -1232,15 +1294,18 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
       ]);
       if (merchantWarehouseResult.rowCount > 0) {
         const row = merchantWarehouseResult.rows[0];
+        merchantAccessToken = String(row?.access_token || "").trim();
         const dbRegion = String(row?.warehouse_region || "").toUpperCase();
         if (dbRegion) {
           warehouseRegion = dbRegion;
         }
         if (row?.warehouse_address_json && typeof row.warehouse_address_json === "object") {
           warehouseAddress = row.warehouse_address_json;
+          warehouseAddressFromMerchant = true;
         } else if (typeof row?.warehouse_address_json === "string" && row.warehouse_address_json.trim()) {
           try {
             warehouseAddress = JSON.parse(row.warehouse_address_json);
+            warehouseAddressFromMerchant = true;
           } catch {
             warehouseAddress = getWarehouseForRegion(warehouseRegion);
           }
@@ -1463,6 +1528,34 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
       } else {
         console.log("LINKED_ORDER DUPLICATE", orderId);
       }
+    }
+  }
+
+  if (bundleCartSelection.selected && warehouseAddressFromMerchant && merchantAccessToken) {
+    console.log(
+      "BUNDLECART ORDER ADDRESS REWRITE START",
+      normalizedShopDomain,
+      orderId
+    );
+    try {
+      await updateOrderShippingAddressToWarehouse(
+        normalizedShopDomain,
+        merchantAccessToken,
+        orderId,
+        warehouseAddress
+      );
+      console.log(
+        "BUNDLECART ORDER ADDRESS REWRITE SUCCESS",
+        normalizedShopDomain,
+        orderId
+      );
+    } catch (error) {
+      console.error(
+        "BUNDLECART ORDER ADDRESS REWRITE ERROR",
+        normalizedShopDomain,
+        orderId,
+        error
+      );
     }
   }
 
