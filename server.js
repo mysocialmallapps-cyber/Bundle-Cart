@@ -353,6 +353,13 @@ FROM information_schema.columns
 WHERE table_schema = 'public' AND table_name = 'merchants';
 `;
 
+const SELECT_TABLE_COLUMNS_SQL = `
+SELECT column_name
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = $1::text
+ORDER BY ordinal_position;
+`;
+
 const ALTER_MERCHANTS_ADD_DOMAIN_SQL = `
 ALTER TABLE merchants ADD COLUMN IF NOT EXISTS domain TEXT;
 `;
@@ -1141,94 +1148,46 @@ export async function ensureLinkingTablesExist() {
   await dbPool.query(CREATE_MERCHANTS_DOMAIN_UNIQUE_INDEX_SQL);
   console.log("DB SCHEMA OK merchants");
 
-  await dbPool.query(CREATE_LINK_GROUPS_TABLE_SQL);
-  await runNonCriticalSchemaQuery(ALTER_LINK_GROUPS_ADD_EMAIL_SQL, "link_groups add email");
-  await runNonCriticalSchemaQuery(
-    ALTER_LINK_GROUPS_ADD_CREATED_AT_SQL,
-    "link_groups add created_at"
-  );
-  await runNonCriticalSchemaQuery(
-    ALTER_LINK_GROUPS_ADD_LAST_SEEN_AT_SQL,
-    "link_groups add last_seen_at"
-  );
-  await runNonCriticalSchemaQuery(
-    ALTER_LINK_GROUPS_ADD_ACTIVE_UNTIL_SQL,
-    "link_groups add active_until"
-  );
-  await runNonCriticalSchemaQuery(
-    ALTER_LINK_GROUPS_ADD_ADDRESS_HASH_SQL,
-    "link_groups add address_hash"
-  );
-  await runNonCriticalSchemaQuery(
-    ALTER_LINK_GROUPS_ADD_BUNDLECART_PAID_AT_SQL,
-    "link_groups add bundlecart_paid_at"
-  );
-  await runNonCriticalSchemaQuery(
-    ALTER_LINK_GROUPS_ADD_FIRST_PAID_ORDER_ID_SQL,
-    "link_groups add first_paid_order_id"
-  );
-  await runNonCriticalSchemaQuery(
-    ALTER_LINK_GROUPS_ADD_CUSTOMER_ADDRESS_JSON_SQL,
-    "link_groups add customer_address_json"
-  );
-  await runNonCriticalSchemaQuery(
-    ALTER_LINK_GROUPS_ADD_WAREHOUSE_REGION_SQL,
-    "link_groups add warehouse_region"
-  );
-  await runNonCriticalSchemaQuery(
-    ALTER_LINK_GROUPS_ADD_WAREHOUSE_ADDRESS_JSON_SQL,
-    "link_groups add warehouse_address_json"
-  );
-  await dbPool.query(CREATE_LINK_GROUPS_INDEX_SQL);
-  console.log("DB SCHEMA OK link_groups");
+  console.log("MIGRATION START link_groups");
+  try {
+    await dbPool.query(CREATE_LINK_GROUPS_TABLE_SQL);
+    await dbPool.query(ALTER_LINK_GROUPS_ADD_EMAIL_SQL);
+    await dbPool.query(ALTER_LINK_GROUPS_ADD_CREATED_AT_SQL);
+    await dbPool.query(ALTER_LINK_GROUPS_ADD_LAST_SEEN_AT_SQL);
+    await dbPool.query(ALTER_LINK_GROUPS_ADD_ACTIVE_UNTIL_SQL);
+    await dbPool.query(ALTER_LINK_GROUPS_ADD_ADDRESS_HASH_SQL);
+    await dbPool.query(ALTER_LINK_GROUPS_ADD_BUNDLECART_PAID_AT_SQL);
+    await dbPool.query(ALTER_LINK_GROUPS_ADD_FIRST_PAID_ORDER_ID_SQL);
+    await dbPool.query(ALTER_LINK_GROUPS_ADD_CUSTOMER_ADDRESS_JSON_SQL);
+    await dbPool.query(ALTER_LINK_GROUPS_ADD_WAREHOUSE_REGION_SQL);
+    await dbPool.query(ALTER_LINK_GROUPS_ADD_WAREHOUSE_ADDRESS_JSON_SQL);
+    await dbPool.query(CREATE_LINK_GROUPS_INDEX_SQL);
+    console.log("MIGRATION DONE link_groups");
+    console.log("DB SCHEMA OK link_groups");
+  } catch (error) {
+    console.error("MIGRATION ERROR link_groups", error);
+  }
 
-  await dbPool.query(CREATE_LINKED_ORDERS_TABLE_SQL);
-  await runNonCriticalSchemaQuery(
-    ALTER_LINKED_ORDERS_ADD_GROUP_ID_SQL,
-    "linked_orders add group_id"
-  );
-  await runNonCriticalSchemaQuery(
-    ALTER_LINKED_ORDERS_ADD_SHOP_DOMAIN_SQL,
-    "linked_orders add shop_domain"
-  );
-  await runNonCriticalSchemaQuery(
-    ALTER_LINKED_ORDERS_ADD_SHOPIFY_ORDER_ID_SQL,
-    "linked_orders add shopify_order_id"
-  );
-  await runNonCriticalSchemaQuery(
-    ALTER_LINKED_ORDERS_ADD_EMAIL_SQL,
-    "linked_orders add email"
-  );
-  await runNonCriticalSchemaQuery(
-    ALTER_LINKED_ORDERS_ADD_BUNDLECART_SELECTED_SQL,
-    "linked_orders add bundlecart_selected"
-  );
-  await runNonCriticalSchemaQuery(
-    ALTER_LINKED_ORDERS_ADD_BUNDLECART_PAID_SQL,
-    "linked_orders add bundlecart_paid"
-  );
-  await runNonCriticalSchemaQuery(
-    ALTER_LINKED_ORDERS_ADD_ADDRESS_HASH_SQL,
-    "linked_orders add address_hash"
-  );
-  await runNonCriticalSchemaQuery(
-    ALTER_LINKED_ORDERS_ADD_WAREHOUSE_REGION_SQL,
-    "linked_orders add warehouse_region"
-  );
-  await runNonCriticalSchemaQuery(
-    ALTER_LINKED_ORDERS_ADD_WAREHOUSE_ADDRESS_JSON_SQL,
-    "linked_orders add warehouse_address_json"
-  );
-  await runNonCriticalSchemaQuery(
-    ALTER_LINKED_ORDERS_ADD_CREATED_AT_SQL,
-    "linked_orders add created_at"
-  );
-  await runNonCriticalSchemaQuery(
-    ALTER_LINKED_ORDERS_ADD_INSERTED_AT_SQL,
-    "linked_orders add inserted_at"
-  );
-  await dbPool.query(CREATE_LINKED_ORDERS_UNIQUE_INDEX_SQL);
-  console.log("DB SCHEMA OK linked_orders");
+  console.log("MIGRATION START linked_orders");
+  try {
+    await dbPool.query(CREATE_LINKED_ORDERS_TABLE_SQL);
+    await dbPool.query(ALTER_LINKED_ORDERS_ADD_GROUP_ID_SQL);
+    await dbPool.query(ALTER_LINKED_ORDERS_ADD_SHOP_DOMAIN_SQL);
+    await dbPool.query(ALTER_LINKED_ORDERS_ADD_SHOPIFY_ORDER_ID_SQL);
+    await dbPool.query(ALTER_LINKED_ORDERS_ADD_EMAIL_SQL);
+    await dbPool.query(ALTER_LINKED_ORDERS_ADD_BUNDLECART_SELECTED_SQL);
+    await dbPool.query(ALTER_LINKED_ORDERS_ADD_BUNDLECART_PAID_SQL);
+    await dbPool.query(ALTER_LINKED_ORDERS_ADD_ADDRESS_HASH_SQL);
+    await dbPool.query(ALTER_LINKED_ORDERS_ADD_WAREHOUSE_REGION_SQL);
+    await dbPool.query(ALTER_LINKED_ORDERS_ADD_WAREHOUSE_ADDRESS_JSON_SQL);
+    await dbPool.query(ALTER_LINKED_ORDERS_ADD_CREATED_AT_SQL);
+    await dbPool.query(ALTER_LINKED_ORDERS_ADD_INSERTED_AT_SQL);
+    await dbPool.query(CREATE_LINKED_ORDERS_UNIQUE_INDEX_SQL);
+    console.log("MIGRATION DONE linked_orders");
+    console.log("DB SCHEMA OK linked_orders");
+  } catch (error) {
+    console.error("MIGRATION ERROR linked_orders", error);
+  }
 }
 
 async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPayload }) {
@@ -1923,6 +1882,30 @@ export function createApp() {
     } catch (error) {
       console.error("DEBUG MERCHANTS ERROR", error);
       res.status(500).json({ merchants: [] });
+    }
+  });
+
+  app.get("/api/debug/schema", async (_req, res) => {
+    if (!dbPool) {
+      res.json({ merchants: [], link_groups: [], linked_orders: [] });
+      return;
+    }
+
+    try {
+      const [merchantsResult, linkGroupsResult, linkedOrdersResult] = await Promise.all([
+        dbPool.query(SELECT_TABLE_COLUMNS_SQL, ["merchants"]),
+        dbPool.query(SELECT_TABLE_COLUMNS_SQL, ["link_groups"]),
+        dbPool.query(SELECT_TABLE_COLUMNS_SQL, ["linked_orders"])
+      ]);
+
+      res.json({
+        merchants: merchantsResult.rows.map((row) => row.column_name),
+        link_groups: linkGroupsResult.rows.map((row) => row.column_name),
+        linked_orders: linkedOrdersResult.rows.map((row) => row.column_name)
+      });
+    } catch (error) {
+      console.error("DEBUG SCHEMA ERROR", error);
+      res.status(500).json({ merchants: [], link_groups: [], linked_orders: [] });
     }
   });
 
