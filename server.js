@@ -196,7 +196,7 @@ WHERE domain = $6::text;
 `;
 
 const SELECT_MERCHANT_WAREHOUSE_SQL = `
-SELECT warehouse_region, warehouse_address_json, access_token
+SELECT domain, warehouse_region, warehouse_address_json, access_token
 FROM merchants
 WHERE domain = $1::text
 LIMIT 1;
@@ -1279,7 +1279,10 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
   console.log("BUNDLECART WEBHOOK ADDRESS HASH", addressHash || "");
   let warehouseRegion = "US";
   let warehouseAddress = getWarehouseForRegion("US");
-  let warehouseAddressFromMerchant = false;
+  let merchantFound = false;
+  let merchantDomain = "";
+  let hasWarehouseAddress = false;
+  let hasAccessToken = false;
   let merchantAccessToken = "";
 
   if (!normalizedShopDomain) {
@@ -1293,19 +1296,21 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
         normalizedShopDomain
       ]);
       if (merchantWarehouseResult.rowCount > 0) {
+        merchantFound = true;
         const row = merchantWarehouseResult.rows[0];
+        merchantDomain = String(row?.domain || normalizedShopDomain);
         merchantAccessToken = String(row?.access_token || "").trim();
+        hasAccessToken = Boolean(merchantAccessToken);
+        hasWarehouseAddress = Boolean(row?.warehouse_address_json);
         const dbRegion = String(row?.warehouse_region || "").toUpperCase();
         if (dbRegion) {
           warehouseRegion = dbRegion;
         }
         if (row?.warehouse_address_json && typeof row.warehouse_address_json === "object") {
           warehouseAddress = row.warehouse_address_json;
-          warehouseAddressFromMerchant = true;
         } else if (typeof row?.warehouse_address_json === "string" && row.warehouse_address_json.trim()) {
           try {
             warehouseAddress = JSON.parse(row.warehouse_address_json);
-            warehouseAddressFromMerchant = true;
           } catch {
             warehouseAddress = getWarehouseForRegion(warehouseRegion);
           }
@@ -1317,6 +1322,13 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
       console.error("MERCHANT WAREHOUSE LOAD ERROR", normalizedShopDomain, error);
     }
   }
+
+  console.log("BUNDLECART REWRITE MERCHANT LOOKUP", {
+    domain: merchantDomain || normalizedShopDomain || "",
+    token_present: hasAccessToken,
+    warehouse_region: warehouseRegion || "",
+    warehouse_address_present: hasWarehouseAddress
+  });
 
   if (bundleCartSelection.selected) {
     console.log("BUNDLECART WAREHOUSE ASSIGNED", normalizedShopDomain, warehouseRegion);
@@ -1531,7 +1543,27 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
     }
   }
 
-  if (bundleCartSelection.selected && warehouseAddressFromMerchant && merchantAccessToken) {
+  console.log(
+    "BUNDLECART REWRITE CHECK START",
+    normalizedShopDomain,
+    orderId
+  );
+  console.log("BUNDLECART REWRITE CHECK FLAGS", {
+    bundlecartSelected: bundleCartSelection.selected,
+    bundlecartPaid: bundleCartSelection.paid,
+    shopDomain: normalizedShopDomain,
+    orderId,
+    hasWarehouseAddress,
+    hasAccessToken,
+    merchantFound
+  });
+
+  if (bundleCartSelection.selected && hasWarehouseAddress && hasAccessToken) {
+    console.log(
+      "BUNDLECART ORDER ADDRESS REWRITE INVOKE",
+      normalizedShopDomain,
+      orderId
+    );
     console.log(
       "BUNDLECART ORDER ADDRESS REWRITE START",
       normalizedShopDomain,
