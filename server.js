@@ -1315,17 +1315,6 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
         if (dbRegion) {
           warehouseRegion = dbRegion;
         }
-        if (row?.warehouse_address_json && typeof row.warehouse_address_json === "object") {
-          warehouseAddress = row.warehouse_address_json;
-        } else if (typeof row?.warehouse_address_json === "string" && row.warehouse_address_json.trim()) {
-          try {
-            warehouseAddress = JSON.parse(row.warehouse_address_json);
-          } catch {
-            warehouseAddress = getWarehouseForRegion(warehouseRegion);
-          }
-        } else {
-          warehouseAddress = getWarehouseForRegion(warehouseRegion);
-        }
       }
     } catch (error) {
       console.error("MERCHANT WAREHOUSE LOAD ERROR", normalizedShopDomain, error);
@@ -1563,13 +1552,8 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
     runtimeWarehouseAssigned &&
     Boolean(warehouseAddress) &&
     typeof warehouseAddress === "object";
-  const hasWarehouseAddressFromRuntimeOrMerchant =
-    hasWarehouseAddressFromRuntime || hasWarehouseAddress;
-  const rewriteWarehouseAddress = hasWarehouseAddressFromRuntime
-    ? warehouseAddress
-    : hasWarehouseAddress
-      ? warehouseAddress
-      : null;
+  const bundlecartSelected = bundleCartSelection.selected;
+  const accessToken = merchantAccessToken;
 
   console.log(
     "BUNDLECART REWRITE CHECK START",
@@ -1577,29 +1561,21 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
     orderId
   );
   console.log("BUNDLECART REWRITE CHECK FLAGS", {
-    bundlecartSelected: bundleCartSelection.selected,
+    bundlecartSelected,
     bundlecartPaid: bundleCartSelection.paid,
     shopDomain: normalizedShopDomain,
     orderId,
-    hasWarehouseAddress: hasWarehouseAddressFromRuntimeOrMerchant,
+    hasWarehouseAddress: hasWarehouseAddressFromRuntime,
     hasAccessToken,
     merchantFound
   });
 
-  if (bundleCartSelection.selected && hasWarehouseAddressFromRuntimeOrMerchant && hasAccessToken) {
-    if (hasWarehouseAddressFromRuntime) {
-      console.log(
-        "BUNDLECART REWRITE USING RUNTIME WAREHOUSE",
-        normalizedShopDomain,
-        orderId
-      );
-    } else {
-      console.log(
-        "BUNDLECART REWRITE USING MERCHANT WAREHOUSE FALLBACK",
-        normalizedShopDomain,
-        orderId
-      );
-    }
+  if (bundlecartSelected === true && accessToken && warehouseAddress) {
+    console.log(
+      "BUNDLECART REWRITE USING RUNTIME WAREHOUSE",
+      normalizedShopDomain,
+      orderId
+    );
     console.log(
       "BUNDLECART ORDER ADDRESS REWRITE INVOKE",
       normalizedShopDomain,
@@ -1613,9 +1589,9 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
     try {
       await updateOrderShippingAddressToWarehouse(
         normalizedShopDomain,
-        merchantAccessToken,
+        accessToken,
         orderId,
-        rewriteWarehouseAddress
+        warehouseAddress
       );
       console.log(
         "BUNDLECART ORDER ADDRESS REWRITE SUCCESS",
