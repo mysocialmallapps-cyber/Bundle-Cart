@@ -59,6 +59,45 @@ function formatTimeRemaining(activeUntil) {
   };
 }
 
+function getRemainingTimeMs(activeUntil, nowMs) {
+  if (!activeUntil) {
+    return null;
+  }
+  const expiresAt = new Date(activeUntil).getTime();
+  if (Number.isNaN(expiresAt)) {
+    return null;
+  }
+  return expiresAt - nowMs;
+}
+
+function compareBundlesByUrgency(a, b, nowMs) {
+  const aRemaining = getRemainingTimeMs(a.active_until, nowMs);
+  const bRemaining = getRemainingTimeMs(b.active_until, nowMs);
+
+  const aExpired = aRemaining !== null && aRemaining <= 0;
+  const bExpired = bRemaining !== null && bRemaining <= 0;
+
+  if (aExpired !== bExpired) {
+    return aExpired ? -1 : 1;
+  }
+
+  if (aExpired && bExpired) {
+    return aRemaining - bRemaining;
+  }
+
+  if (aRemaining === null && bRemaining === null) {
+    return Number(a.id || 0) - Number(b.id || 0);
+  }
+  if (aRemaining === null) {
+    return 1;
+  }
+  if (bRemaining === null) {
+    return -1;
+  }
+
+  return aRemaining - bRemaining;
+}
+
 export default function AdminBundlesPage() {
   const [bundles, setBundles] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -106,11 +145,12 @@ export default function AdminBundlesPage() {
   }, [bundles]);
 
   const filteredBundles = useMemo(() => {
+    const nowMs = Date.now();
     const search = query.trim().toLowerCase();
-    if (!search) {
-      return bundles;
-    }
-    return bundles.filter((bundle) => {
+    const matchingBundles = bundles.filter((bundle) => {
+      if (!search) {
+        return true;
+      }
       const haystacks = [
         String(bundle.id || ""),
         String(bundle.customerEmail || ""),
@@ -121,6 +161,8 @@ export default function AdminBundlesPage() {
         .toLowerCase();
       return haystacks.includes(search);
     });
+
+    return matchingBundles.slice().sort((a, b) => compareBundlesByUrgency(a, b, nowMs));
   }, [bundles, query]);
 
   return (
