@@ -1,8 +1,8 @@
-const runtimeAppUrl =
-  typeof window !== "undefined" ? window.__BUNDLECART_CONFIG__?.APP_URL : "";
+const runtimeConfig =
+  typeof window !== "undefined" ? window.__BUNDLECART_CONFIG__ || window.APP_CONFIG || {} : {};
+const runtimeAppUrl = runtimeConfig.APP_URL || "";
 const envAppUrl = import.meta.env.APP_URL || import.meta.env.VITE_APP_URL || "";
-const runtimeAdminToken =
-  typeof window !== "undefined" ? window.__BUNDLECART_CONFIG__?.ADMIN_DASHBOARD_TOKEN : "";
+const runtimeAdminToken = runtimeConfig.ADMIN_DASHBOARD_TOKEN || "";
 const envAdminToken =
   import.meta.env.ADMIN_DASHBOARD_TOKEN || import.meta.env.VITE_ADMIN_DASHBOARD_TOKEN || "";
 
@@ -46,6 +46,20 @@ function getAdminHeaders() {
   return ADMIN_DASHBOARD_TOKEN ? { "X-ADMIN-TOKEN": ADMIN_DASHBOARD_TOKEN } : {};
 }
 
+async function requestDashboard(path) {
+  console.log("BUNDLE DASHBOARD API REQUEST", path);
+  try {
+    const payload = await request(path, {
+      headers: getAdminHeaders()
+    });
+    console.log("BUNDLE DASHBOARD API SUCCESS", path);
+    return payload;
+  } catch (error) {
+    console.error("BUNDLE DASHBOARD API ERROR", path, error);
+    throw error;
+  }
+}
+
 export const api = {
   getHealth: (signal) => request("/health", { signal }),
   getDashboard: (signal) => request("/dashboard", { signal }),
@@ -56,18 +70,9 @@ export const api = {
   deleteBundle: (bundleId) => request(`/bundles/${bundleId}`, { method: "DELETE" }),
   getOrders: (signal) => request("/orders?crossStoreWindowHours=24", { signal }),
   getCustomerInsights: (signal) => request("/customers/insights", { signal }),
-  getAdminBundles: () =>
-    request("/admin/bundles", {
-      headers: getAdminHeaders()
-    }),
-  getAdminReadyBundles: () =>
-    request("/admin/bundles/ready", {
-      headers: getAdminHeaders()
-    }),
-  getAdminBundleDetail: (bundleId) =>
-    request(`/admin/bundles/${bundleId}`, {
-      headers: getAdminHeaders()
-    })
+  getAdminBundles: () => requestDashboard("/admin/bundles"),
+  getAdminReadyBundles: () => requestDashboard("/admin/bundles/ready"),
+  getAdminBundleDetail: (bundleId) => requestDashboard(`/admin/bundles/${bundleId}`)
 };
 
 export function getIntegrationConfig() {

@@ -2308,12 +2308,18 @@ export function createApp() {
   app.get("/app-config.js", (_req, res) => {
     const appUrl = process.env.APP_URL || "";
     const redirectUrl = process.env.REDIRECT_URL || `${appUrl}/auth/callback`;
+    const adminDashboardToken = process.env.ADMIN_DASHBOARD_TOKEN || "";
     const config = JSON.stringify({
       APP_URL: appUrl,
-      REDIRECT_URL: redirectUrl
+      REDIRECT_URL: redirectUrl,
+      ADMIN_DASHBOARD_TOKEN: adminDashboardToken
     });
 
-    res.type("application/javascript").send(`window.__BUNDLECART_CONFIG__ = ${config};`);
+    res
+      .type("application/javascript")
+      .send(
+        `window.__BUNDLECART_CONFIG__ = ${config}; window.APP_CONFIG = window.__BUNDLECART_CONFIG__;`
+      );
   });
 
   app.get("/", async (req, res) => {
