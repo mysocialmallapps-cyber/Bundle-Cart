@@ -36,7 +36,7 @@ export default function App() {
             <Route path="/admin/dashboard" element={<Navigate to="/admin/bundles" replace />} />
             <Route path="/admin/bundles" element={<AdminBundlesPage />} />
             <Route path="/admin/bundles/:id" element={<AdminBundleDetailPage />} />
-            <Route path="*" element={<Navigate to="/admin/bundles" replace />} />
+            <Route path="/admin/*" element={<Navigate to="/admin/bundles" replace />} />
           </Routes>
         </section>
       </main>
