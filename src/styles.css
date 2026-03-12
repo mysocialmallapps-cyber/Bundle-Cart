@@ -357,6 +357,29 @@ input:focus {
   font-size: 0.85rem;
 }
 
+.time-remaining-pill {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.time-remaining-neutral {
+  background: #eceff4;
+  color: #475467;
+}
+
+.time-remaining-warning {
+  background: #fff4cc;
+  color: #8b5e00;
+}
+
+.time-remaining-expired {
+  background: #fee2e2;
+  color: #b42318;
+}
+
 .toast {
   position: fixed;
   right: 20px;

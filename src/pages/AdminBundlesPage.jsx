@@ -31,6 +31,34 @@ function normalizeBundle(bundle) {
   };
 }
 
+const ONE_MINUTE_MS = 60 * 1000;
+const ONE_HOUR_MS = 60 * ONE_MINUTE_MS;
+const ONE_DAY_MS = 24 * ONE_HOUR_MS;
+
+function formatTimeRemaining(activeUntil) {
+  if (!activeUntil) {
+    return { label: "N/A", tone: "neutral" };
+  }
+
+  const expiresAt = new Date(activeUntil).getTime();
+  if (Number.isNaN(expiresAt)) {
+    return { label: "N/A", tone: "neutral" };
+  }
+
+  const remainingMs = expiresAt - Date.now();
+  if (remainingMs <= 0) {
+    return { label: "Expired", tone: "expired" };
+  }
+
+  const totalMinutes = Math.floor(remainingMs / ONE_MINUTE_MS);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return {
+    label: `${hours}h ${minutes}m`,
+    tone: remainingMs < ONE_DAY_MS ? "warning" : "neutral"
+  };
+}
+
 export default function AdminBundlesPage() {
   const [bundles, setBundles] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -152,35 +180,44 @@ export default function AdminBundlesPage() {
                   <th>Warehouse Region</th>
                   <th>Bundle Opened</th>
                   <th>Bundle Expires</th>
+                  <th>Time Remaining</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredBundles.map((bundle) => (
-                  <tr key={bundle.id} className="clickable-row">
-                    <td>
-                      <Link to={`/admin/bundles/${bundle.id}`} className="row-link">
-                        {bundle.id}
-                      </Link>
-                    </td>
-                    <td>
-                      <span
-                        className={`status-pill ${
-                          bundle.status === "READY_TO_SHIP" ? "status-ready" : "status-open"
-                        }`}
-                      >
-                        {bundle.status}
-                      </span>
-                    </td>
-                    <td>{bundle.customerName}</td>
-                    <td>{bundle.customerEmail || "N/A"}</td>
-                    <td>{bundle.customerCity || "N/A"}</td>
-                    <td>{bundle.customerCountry || "N/A"}</td>
-                    <td>{bundle.orderCount}</td>
-                    <td>{bundle.warehouseRegion}</td>
-                    <td>{formatDateTime(bundle.bundlecart_paid_at)}</td>
-                    <td>{formatDateTime(bundle.active_until)}</td>
-                  </tr>
-                ))}
+                {filteredBundles.map((bundle) => {
+                  const timeRemaining = formatTimeRemaining(bundle.active_until);
+                  return (
+                    <tr key={bundle.id} className="clickable-row">
+                      <td>
+                        <Link to={`/admin/bundles/${bundle.id}`} className="row-link">
+                          {bundle.id}
+                        </Link>
+                      </td>
+                      <td>
+                        <span
+                          className={`status-pill ${
+                            bundle.status === "READY_TO_SHIP" ? "status-ready" : "status-open"
+                          }`}
+                        >
+                          {bundle.status}
+                        </span>
+                      </td>
+                      <td>{bundle.customerName}</td>
+                      <td>{bundle.customerEmail || "N/A"}</td>
+                      <td>{bundle.customerCity || "N/A"}</td>
+                      <td>{bundle.customerCountry || "N/A"}</td>
+                      <td>{bundle.orderCount}</td>
+                      <td>{bundle.warehouseRegion}</td>
+                      <td>{formatDateTime(bundle.bundlecart_paid_at)}</td>
+                      <td>{formatDateTime(bundle.active_until)}</td>
+                      <td>
+                        <span className={`time-remaining-pill time-remaining-${timeRemaining.tone}`}>
+                          {timeRemaining.label}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
