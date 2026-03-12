@@ -248,6 +248,16 @@ th {
   color: #0f766e;
 }
 
+.status-open {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.status-ready {
+  background: #ddf5ec;
+  color: #0f766e;
+}
+
 .status-neutral {
   background: #eceff4;
   color: #475467;
@@ -317,6 +327,36 @@ input:focus {
   font-size: 0.83rem;
 }
 
+.admin-search-input {
+  width: min(430px, 100%);
+}
+
+.clickable-row:hover {
+  background: #f8fafc;
+}
+
+.row-link {
+  color: var(--brand-dark);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.row-link:hover {
+  text-decoration: underline;
+}
+
+.detail-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+}
+
+.detail-label {
+  margin: 0 0 4px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
 .toast {
   position: fixed;
   right: 20px;
@@ -366,6 +406,10 @@ input:focus {
 
   .stats-grid,
   .stats-grid-small {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-grid {
     grid-template-columns: 1fr;
   }
 }

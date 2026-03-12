@@ -414,6 +414,43 @@ ORDER BY lg.created_at DESC
 LIMIT 100;
 `;
 
+const SELECT_ADMIN_BUNDLE_DETAIL_SQL = `
+SELECT
+  lg.id,
+  lg.email,
+  lg.customer_address_json,
+  lg.warehouse_region,
+  lg.warehouse_address_json,
+  lg.bundlecart_paid_at,
+  lg.active_until,
+  lg.address_hash,
+  CASE
+    WHEN lg.active_until IS NOT NULL AND lg.active_until <= NOW() THEN 'READY_TO_SHIP'
+    ELSE 'OPEN'
+  END AS bundle_status,
+  COUNT(lo.id) AS order_count
+FROM link_groups lg
+LEFT JOIN linked_orders lo
+  ON lo.group_id = lg.id
+WHERE lg.id = $1::integer
+GROUP BY lg.id
+LIMIT 1;
+`;
+
+const SELECT_ADMIN_LINKED_ORDERS_FOR_BUNDLE_SQL = `
+SELECT
+  lo.id,
+  lo.shopify_order_id,
+  lo.shop_domain,
+  lo.created_at AS order_created_at,
+  lo.bundlecart_selected,
+  lo.bundlecart_paid,
+  lo.email
+FROM linked_orders lo
+WHERE lo.group_id = $1::integer
+ORDER BY lo.created_at DESC NULLS LAST, lo.inserted_at DESC;
+`;
+
 const ALTER_MERCHANTS_ADD_DOMAIN_SQL = `
 ALTER TABLE merchants ADD COLUMN IF NOT EXISTS domain TEXT;
 `;
@@ -2076,6 +2113,47 @@ export function createApp() {
     } catch (error) {
       console.error("BUNDLE READY FETCH ERROR", error);
       res.status(500).json({ bundles: [] });
+    }
+  });
+
+  app.get("/api/admin/bundles/:id", async (req, res) => {
+    if (!isAdminDashboardAuthorized(req)) {
+      res.status(401).json({ ok: false });
+      return;
+    }
+
+    const bundleId = Number.parseInt(req.params.id, 10);
+    if (!Number.isInteger(bundleId) || bundleId <= 0) {
+      res.status(400).json({ ok: false, message: "Invalid bundle id" });
+      return;
+    }
+
+    console.log("BUNDLE DETAIL FETCH", bundleId);
+
+    if (!dbPool) {
+      res.status(404).json({ ok: false, message: "Bundle not found" });
+      return;
+    }
+
+    try {
+      const [bundleResult, ordersResult] = await Promise.all([
+        dbPool.query(SELECT_ADMIN_BUNDLE_DETAIL_SQL, [bundleId]),
+        dbPool.query(SELECT_ADMIN_LINKED_ORDERS_FOR_BUNDLE_SQL, [bundleId])
+      ]);
+
+      const bundle = bundleResult.rows[0];
+      if (!bundle) {
+        res.status(404).json({ ok: false, message: "Bundle not found" });
+        return;
+      }
+
+      res.json({
+        bundle,
+        orders: ordersResult.rows
+      });
+    } catch (error) {
+      console.error("BUNDLE DETAIL FETCH ERROR", error);
+      res.status(500).json({ ok: false });
     }
   });
 

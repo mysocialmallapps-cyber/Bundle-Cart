@@ -5,13 +5,16 @@ import BundlesPage from "./pages/BundlesPage";
 import OrdersPage from "./pages/OrdersPage";
 import CustomerInsightsPage from "./pages/CustomerInsightsPage";
 import SettingsPage from "./pages/SettingsPage";
+import AdminBundlesPage from "./pages/AdminBundlesPage";
+import AdminBundleDetailPage from "./pages/AdminBundleDetailPage";
 
 const NAV_ITEMS = [
   { to: "/dashboard", label: "Dashboard" },
   { to: "/bundles", label: "Bundle Management" },
   { to: "/orders", label: "Orders" },
   { to: "/insights", label: "Customer Insights" },
-  { to: "/settings", label: "Settings & Integration" }
+  { to: "/settings", label: "Settings & Integration" },
+  { to: "/admin/bundles", label: "Operations Bundles" }
 ];
 
 function Toast({ item }) {
@@ -82,6 +85,8 @@ export default function App() {
             <Route path="/orders" element={<OrdersPage notify={notifier} />} />
             <Route path="/insights" element={<CustomerInsightsPage notify={notifier} />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/admin/bundles" element={<AdminBundlesPage />} />
+            <Route path="/admin/bundles/:id" element={<AdminBundleDetailPage />} />
           </Routes>
         </section>
       </main>

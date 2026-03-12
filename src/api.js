@@ -1,18 +1,24 @@
 const runtimeAppUrl =
   typeof window !== "undefined" ? window.__BUNDLECART_CONFIG__?.APP_URL : "";
 const envAppUrl = import.meta.env.APP_URL || import.meta.env.VITE_APP_URL || "";
+const runtimeAdminToken =
+  typeof window !== "undefined" ? window.__BUNDLECART_CONFIG__?.ADMIN_DASHBOARD_TOKEN : "";
+const envAdminToken =
+  import.meta.env.ADMIN_DASHBOARD_TOKEN || import.meta.env.VITE_ADMIN_DASHBOARD_TOKEN || "";
 
 const APP_URL = (runtimeAppUrl || envAppUrl || "").replace(/\/$/, "");
 export const API_BASE_URL = APP_URL ? `${APP_URL}/api` : "/api";
+const ADMIN_DASHBOARD_TOKEN = runtimeAdminToken || envAdminToken || "";
 
 async function request(path, options = {}) {
-  const { method = "GET", body, signal } = options;
+  const { method = "GET", body, signal, headers = {} } = options;
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method,
     credentials: "include",
     signal,
     headers: {
-      ...(body ? { "Content-Type": "application/json" } : {})
+      ...(body ? { "Content-Type": "application/json" } : {}),
+      ...headers
     },
     body: body ? JSON.stringify(body) : undefined
   });
@@ -36,6 +42,10 @@ async function request(path, options = {}) {
   return response.json();
 }
 
+function getAdminHeaders() {
+  return ADMIN_DASHBOARD_TOKEN ? { "X-ADMIN-TOKEN": ADMIN_DASHBOARD_TOKEN } : {};
+}
+
 export const api = {
   getHealth: (signal) => request("/health", { signal }),
   getDashboard: (signal) => request("/dashboard", { signal }),
@@ -45,7 +55,19 @@ export const api = {
     request(`/bundles/${bundleId}`, { method: "PUT", body: payload }),
   deleteBundle: (bundleId) => request(`/bundles/${bundleId}`, { method: "DELETE" }),
   getOrders: (signal) => request("/orders?crossStoreWindowHours=24", { signal }),
-  getCustomerInsights: (signal) => request("/customers/insights", { signal })
+  getCustomerInsights: (signal) => request("/customers/insights", { signal }),
+  getAdminBundles: () =>
+    request("/admin/bundles", {
+      headers: getAdminHeaders()
+    }),
+  getAdminReadyBundles: () =>
+    request("/admin/bundles/ready", {
+      headers: getAdminHeaders()
+    }),
+  getAdminBundleDetail: (bundleId) =>
+    request(`/admin/bundles/${bundleId}`, {
+      headers: getAdminHeaders()
+    })
 };
 
 export function getIntegrationConfig() {
