@@ -936,7 +936,8 @@ async function updateOrderShippingAddressToWarehouse(
   shopDomain,
   accessToken,
   shopifyOrderId,
-  warehouseAddress
+  warehouseAddress,
+  customerName
 ) {
   const normalizedShop = normalizeShopDomain(shopDomain);
   const token = String(accessToken || "").trim();
@@ -950,6 +951,11 @@ async function updateOrderShippingAddressToWarehouse(
     normalizeCountryCodeToIso(warehouseAddress.country_code || warehouseAddress.country) || "";
   const parsedOrderId = Number.parseInt(orderId, 10);
   const orderReference = Number.isFinite(parsedOrderId) ? parsedOrderId : orderId;
+  const normalizedCustomerName = String(customerName || "").trim();
+  const companyLabel = normalizedCustomerName
+    ? `BundleCart | ${normalizedCustomerName}`
+    : "BundleCart Shipment";
+  console.log("BUNDLECART LABEL MARKER APPLIED", normalizedShop, orderId);
 
   const endpoint = `https://${normalizedShop}/admin/api/${SHOPIFY_ADMIN_API_VERSION}/orders/${orderId}.json`;
   const payload = {
@@ -958,7 +964,7 @@ async function updateOrderShippingAddressToWarehouse(
       shipping_address: {
         first_name: "BundleCart",
         last_name: "Warehouse",
-        company: warehouseAddress.name || "BundleCart Warehouse",
+        company: companyLabel,
         address1: warehouseAddress.address1 || "",
         address2: warehouseAddress.address2 || "",
         city: warehouseAddress.city || "",
@@ -1373,6 +1379,12 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
   const totalPrice = order.total_price != null ? String(order.total_price) : null;
   const paidAtTimestamp = createdAt || new Date().toISOString();
   const shippingAddress = getOrderShippingAddress(order);
+  const customerName = String(
+    shippingAddress?.name ||
+      order?.customer?.default_address?.name ||
+      [order?.customer?.first_name, order?.customer?.last_name].filter(Boolean).join(" ") ||
+      ""
+  ).trim();
   const { canonical: canonicalAddress, hasRequired: hasRequiredAddress } = buildCanonicalAddress(shippingAddress);
   const addressHash = hasRequiredAddress ? hashAddressCanonical(canonicalAddress) : "";
   console.log("BUNDLECART WEBHOOK CANONICAL ADDRESS", canonicalAddress);
@@ -1715,7 +1727,8 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
             normalizedShopDomain,
             accessToken,
             orderId,
-            warehouseAddress
+            warehouseAddress,
+            customerName
           );
           console.log(
             "BUNDLECART ORDER ADDRESS REWRITE SUCCESS",
