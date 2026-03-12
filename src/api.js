@@ -2,13 +2,9 @@ const runtimeConfig =
   typeof window !== "undefined" ? window.__BUNDLECART_CONFIG__ || window.APP_CONFIG || {} : {};
 const runtimeAppUrl = runtimeConfig.APP_URL || "";
 const envAppUrl = import.meta.env.APP_URL || import.meta.env.VITE_APP_URL || "";
-const runtimeAdminToken = runtimeConfig.ADMIN_DASHBOARD_TOKEN || "";
-const envAdminToken =
-  import.meta.env.ADMIN_DASHBOARD_TOKEN || import.meta.env.VITE_ADMIN_DASHBOARD_TOKEN || "";
 
 const APP_URL = (runtimeAppUrl || envAppUrl || "").replace(/\/$/, "");
 export const API_BASE_URL = APP_URL ? `${APP_URL}/api` : "/api";
-const ADMIN_DASHBOARD_TOKEN = runtimeAdminToken || envAdminToken || "";
 
 async function request(path, options = {}) {
   const { method = "GET", body, signal, headers = {} } = options;
@@ -42,16 +38,10 @@ async function request(path, options = {}) {
   return response.json();
 }
 
-function getAdminHeaders() {
-  return ADMIN_DASHBOARD_TOKEN ? { "X-ADMIN-TOKEN": ADMIN_DASHBOARD_TOKEN } : {};
-}
-
 async function requestDashboard(path) {
   console.log("BUNDLE DASHBOARD API REQUEST", path);
   try {
-    const payload = await request(path, {
-      headers: getAdminHeaders()
-    });
+    const payload = await request(path);
     console.log("BUNDLE DASHBOARD API SUCCESS", path);
     return payload;
   } catch (error) {

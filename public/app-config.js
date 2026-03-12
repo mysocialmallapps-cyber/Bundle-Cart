@@ -1,6 +1,5 @@
 window.__BUNDLECART_CONFIG__ = window.__BUNDLECART_CONFIG__ || {
   APP_URL: "",
-  REDIRECT_URL: "",
-  ADMIN_DASHBOARD_TOKEN: ""
+  REDIRECT_URL: ""
 };
 window.APP_CONFIG = window.__BUNDLECART_CONFIG__;

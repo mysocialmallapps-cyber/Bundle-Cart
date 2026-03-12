@@ -1279,13 +1279,72 @@ async function runNonCriticalSchemaQuery(sql, label) {
   }
 }
 
-function isAdminDashboardAuthorized(req) {
-  const expectedToken = String(process.env.ADMIN_DASHBOARD_TOKEN || "");
-  const providedToken = String(req.get("X-ADMIN-TOKEN") || "");
-  if (!expectedToken || !providedToken) {
-    return false;
+function parseBasicAuthCredentials(req) {
+  const authorizationHeader = String(req.get("authorization") || "");
+  if (!authorizationHeader.startsWith("Basic ")) {
+    return null;
   }
-  return providedToken === expectedToken;
+
+  const encodedCredentials = authorizationHeader.slice("Basic ".length).trim();
+  if (!encodedCredentials) {
+    return null;
+  }
+
+  try {
+    const decodedCredentials = Buffer.from(encodedCredentials, "base64").toString("utf8");
+    const separatorIndex = decodedCredentials.indexOf(":");
+    if (separatorIndex < 0) {
+      return null;
+    }
+
+    return {
+      username: decodedCredentials.slice(0, separatorIndex),
+      password: decodedCredentials.slice(separatorIndex + 1)
+    };
+  } catch {
+    return null;
+  }
+}
+
+function getBundleAdminAuthStatus(req) {
+  const expectedUsername = String(process.env.ADMIN_USERNAME || "");
+  const expectedPassword = String(process.env.ADMIN_PASSWORD || "");
+  const parsedCredentials = parseBasicAuthCredentials(req);
+
+  if (!expectedUsername || !expectedPassword) {
+    return { authorized: false, reason: "missing_admin_env" };
+  }
+  if (!parsedCredentials) {
+    return { authorized: false, reason: "missing_or_invalid_basic_auth" };
+  }
+  if (
+    parsedCredentials.username !== expectedUsername ||
+    parsedCredentials.password !== expectedPassword
+  ) {
+    return { authorized: false, reason: "credentials_mismatch" };
+  }
+  return { authorized: true, reason: "ok" };
+}
+
+function sendBundleAdminAuthChallenge(req, res) {
+  res.set("WWW-Authenticate", 'Basic realm="BundleCart Admin", charset="UTF-8"');
+  if (String(req.originalUrl || "").startsWith("/api/")) {
+    res.status(401).json({ ok: false, message: "Unauthorized" });
+    return;
+  }
+  res.status(401).send("Unauthorized");
+}
+
+function requireBundleAdminAuth(req, res, next) {
+  const authStatus = getBundleAdminAuthStatus(req);
+  if (authStatus.authorized) {
+    console.log("BUNDLE ADMIN AUTH SUCCESS", req.originalUrl || req.path);
+    next();
+    return;
+  }
+
+  console.log("BUNDLE ADMIN AUTH FAIL", req.originalUrl || req.path, authStatus.reason);
+  sendBundleAdminAuthChallenge(req, res);
 }
 
 export async function ensureOrdersTableExists() {
@@ -2069,16 +2128,13 @@ export function createApp() {
   });
 
   app.use("/api", express.json());
+  app.use("/api/admin", requireBundleAdminAuth);
 
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true, time: new Date().toISOString() });
   });
 
   app.get("/api/admin/bundles", async (req, res) => {
-    if (!isAdminDashboardAuthorized(req)) {
-      res.status(401).json({ ok: false });
-      return;
-    }
     console.log("BUNDLE DASHBOARD FETCH");
 
     if (!dbPool) {
@@ -2096,10 +2152,6 @@ export function createApp() {
   });
 
   app.get("/api/admin/bundles/ready", async (req, res) => {
-    if (!isAdminDashboardAuthorized(req)) {
-      res.status(401).json({ ok: false });
-      return;
-    }
     console.log("BUNDLE READY FETCH");
 
     if (!dbPool) {
@@ -2117,11 +2169,6 @@ export function createApp() {
   });
 
   app.get("/api/admin/bundles/:id", async (req, res) => {
-    if (!isAdminDashboardAuthorized(req)) {
-      res.status(401).json({ ok: false });
-      return;
-    }
-
     const bundleId = Number.parseInt(req.params.id, 10);
     if (!Number.isInteger(bundleId) || bundleId <= 0) {
       res.status(400).json({ ok: false, message: "Invalid bundle id" });
@@ -2308,11 +2355,9 @@ export function createApp() {
   app.get("/app-config.js", (_req, res) => {
     const appUrl = process.env.APP_URL || "";
     const redirectUrl = process.env.REDIRECT_URL || `${appUrl}/auth/callback`;
-    const adminDashboardToken = process.env.ADMIN_DASHBOARD_TOKEN || "";
     const config = JSON.stringify({
       APP_URL: appUrl,
-      REDIRECT_URL: redirectUrl,
-      ADMIN_DASHBOARD_TOKEN: adminDashboardToken
+      REDIRECT_URL: redirectUrl
     });
 
     res
@@ -2320,6 +2365,14 @@ export function createApp() {
       .send(
         `window.__BUNDLECART_CONFIG__ = ${config}; window.APP_CONFIG = window.__BUNDLECART_CONFIG__;`
       );
+  });
+
+  app.get("/admin/bundles", requireBundleAdminAuth, (_req, res) => {
+    res.sendFile(path.join(DIST_PATH, "index.html"));
+  });
+
+  app.get("/admin/bundles/:id", requireBundleAdminAuth, (_req, res) => {
+    res.sendFile(path.join(DIST_PATH, "index.html"));
   });
 
   app.get("/", async (req, res) => {
