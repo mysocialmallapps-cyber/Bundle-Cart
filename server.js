@@ -368,6 +368,52 @@ WHERE table_schema = 'public' AND table_name = $1::text
 ORDER BY ordinal_position;
 `;
 
+const SELECT_ADMIN_BUNDLES_SQL = `
+SELECT
+  lg.id,
+  lg.email,
+  lg.customer_address_json,
+  lg.warehouse_region,
+  lg.warehouse_address_json,
+  lg.bundlecart_paid_at,
+  lg.active_until,
+  CASE
+    WHEN lg.active_until IS NOT NULL AND lg.active_until <= NOW() THEN 'READY_TO_SHIP'
+    ELSE 'OPEN'
+  END AS bundle_status,
+  COUNT(lo.id) AS order_count
+FROM link_groups lg
+LEFT JOIN linked_orders lo
+  ON lo.group_id = lg.id
+GROUP BY lg.id
+ORDER BY lg.created_at DESC
+LIMIT 100;
+`;
+
+const SELECT_ADMIN_BUNDLES_READY_SQL = `
+SELECT
+  lg.id,
+  lg.email,
+  lg.customer_address_json,
+  lg.warehouse_region,
+  lg.warehouse_address_json,
+  lg.bundlecart_paid_at,
+  lg.active_until,
+  CASE
+    WHEN lg.active_until IS NOT NULL AND lg.active_until <= NOW() THEN 'READY_TO_SHIP'
+    ELSE 'OPEN'
+  END AS bundle_status,
+  COUNT(lo.id) AS order_count
+FROM link_groups lg
+LEFT JOIN linked_orders lo
+  ON lo.group_id = lg.id
+WHERE lg.active_until IS NOT NULL
+  AND lg.active_until <= NOW()
+GROUP BY lg.id
+ORDER BY lg.created_at DESC
+LIMIT 100;
+`;
+
 const ALTER_MERCHANTS_ADD_DOMAIN_SQL = `
 ALTER TABLE merchants ADD COLUMN IF NOT EXISTS domain TEXT;
 `;
@@ -1190,6 +1236,15 @@ async function runNonCriticalSchemaQuery(sql, label) {
   }
 }
 
+function isAdminDashboardAuthorized(req) {
+  const expectedToken = String(process.env.ADMIN_DASHBOARD_TOKEN || "");
+  const providedToken = String(req.get("X-ADMIN-TOKEN") || "");
+  if (!expectedToken || !providedToken) {
+    return false;
+  }
+  return providedToken === expectedToken;
+}
+
 export async function ensureOrdersTableExists() {
   if (!dbPool) {
     console.warn("DATABASE_URL not set; shopify_orders persistence disabled.");
@@ -1967,6 +2022,48 @@ export function createApp() {
 
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true, time: new Date().toISOString() });
+  });
+
+  app.get("/api/admin/bundles", async (req, res) => {
+    if (!isAdminDashboardAuthorized(req)) {
+      res.status(401).json({ ok: false });
+      return;
+    }
+    console.log("BUNDLE DASHBOARD FETCH");
+
+    if (!dbPool) {
+      res.json({ bundles: [] });
+      return;
+    }
+
+    try {
+      const result = await dbPool.query(SELECT_ADMIN_BUNDLES_SQL);
+      res.json({ bundles: result.rows });
+    } catch (error) {
+      console.error("BUNDLE DASHBOARD FETCH ERROR", error);
+      res.status(500).json({ bundles: [] });
+    }
+  });
+
+  app.get("/api/admin/bundles/ready", async (req, res) => {
+    if (!isAdminDashboardAuthorized(req)) {
+      res.status(401).json({ ok: false });
+      return;
+    }
+    console.log("BUNDLE READY FETCH");
+
+    if (!dbPool) {
+      res.json({ bundles: [] });
+      return;
+    }
+
+    try {
+      const result = await dbPool.query(SELECT_ADMIN_BUNDLES_READY_SQL);
+      res.json({ bundles: result.rows });
+    } catch (error) {
+      console.error("BUNDLE READY FETCH ERROR", error);
+      res.status(500).json({ bundles: [] });
+    }
   });
 
   app.get("/api/debug/linked-orders", async (req, res) => {
