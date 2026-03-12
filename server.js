@@ -1322,6 +1322,7 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
   const addressHash = hasRequiredAddress ? hashAddressCanonical(canonicalAddress) : "";
   console.log("BUNDLECART WEBHOOK CANONICAL ADDRESS", canonicalAddress);
   const bundleCartSelection = extractBundleCartSelection(order);
+  const bundlecartSelected = bundleCartSelection.selected;
   console.log("BUNDLECART WEBHOOK EMAIL", email || "");
   console.log("BUNDLECART WEBHOOK ADDRESS INPUT", JSON.stringify(shippingAddress || {}));
   console.log("BUNDLECART WEBHOOK ADDRESS HASH", addressHash || "");
@@ -1333,6 +1334,7 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
   let hasWarehouseAddress = false;
   let hasAccessToken = false;
   let merchantAccessToken = "";
+  let linkedOrderPersistenceDone = false;
 
   if (!normalizedShopDomain) {
     console.log("MERCHANT SKIPPED missing shop_domain");
@@ -1373,7 +1375,7 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
     hasAccessToken
   );
 
-  if (bundleCartSelection.selected) {
+  if (bundlecartSelected) {
     runtimeWarehouseAssigned =
       Boolean(warehouseAddress) && typeof warehouseAddress === "object";
     console.log("BUNDLECART WAREHOUSE ASSIGNED", normalizedShopDomain, warehouseRegion);
@@ -1549,6 +1551,7 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
         }
       }
     }
+    linkedOrderPersistenceDone = true;
   } else {
     let groupId = null;
     if (!email) {
@@ -1592,90 +1595,100 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
     runtimeWarehouseAssigned &&
     Boolean(warehouseAddress) &&
     typeof warehouseAddress === "object";
-  const bundlecartSelected = bundleCartSelection.selected;
   const accessToken = merchantAccessToken;
+  try {
+    console.log("DB STEP shopify_orders insert");
+    const result = await dbPool.query(INSERT_SHOPIFY_ORDER_SQL, [
+      normalizedShopDomain,
+      orderId,
+      order.email || null,
+      createdAt,
+      totalPrice,
+      order.currency || null,
+      webhookId || null,
+      rawPayload
+    ]);
 
-  console.log(
-    "BUNDLECART REWRITE CHECK START",
-    normalizedShopDomain,
-    orderId
-  );
-  console.log("BUNDLECART REWRITE CHECK FLAGS", {
-    bundlecartSelected,
-    bundlecartPaid: bundleCartSelection.paid,
-    shopDomain: normalizedShopDomain,
-    orderId,
-    hasWarehouseAddress: hasWarehouseAddressFromRuntime,
-    hasAccessToken,
-    merchantFound
-  });
-
-  if (bundlecartSelected === true && accessToken && warehouseAddress) {
-    console.log(
-      "BUNDLECART REWRITE USING RUNTIME WAREHOUSE",
-      normalizedShopDomain,
-      orderId
-    );
-    console.log(
-      "BUNDLECART ORDER ADDRESS REWRITE INVOKE",
-      normalizedShopDomain,
-      orderId
-    );
-    console.log(
-      "BUNDLECART ORDER ADDRESS REWRITE START",
-      normalizedShopDomain,
-      orderId
-    );
-    try {
-      await updateOrderShippingAddressToWarehouse(
-        normalizedShopDomain,
-        accessToken,
-        orderId,
-        warehouseAddress
-      );
+    if (result.rowCount > 0) {
+      console.log(`ORDER SAVED id=${orderId} shop=${shopDomain}`);
+    } else {
+      console.log("ORDER DUPLICATE IGNORED");
+    }
+  } finally {
+    if (bundlecartSelected) {
+      console.log("BUNDLECART POST-PERSIST START", normalizedShopDomain, orderId);
       console.log(
-        "BUNDLECART ORDER ADDRESS REWRITE SUCCESS",
+        "BUNDLECART POST-PERSIST LINKED_ORDER_DONE",
         normalizedShopDomain,
         orderId
       );
-    } catch (error) {
-      console.error(
-        "BUNDLECART ORDER ADDRESS REWRITE ERROR",
+      console.log(
+        "BUNDLECART POST-PERSIST SHOPIFY_ORDER_SAVE_DONE",
         normalizedShopDomain,
-        orderId,
-        error
+        orderId
       );
-      const rewriteErrorMessage = String(error?.message || error || "").toLowerCase();
-      if (
-        rewriteErrorMessage.includes("status_403") &&
-        rewriteErrorMessage.includes("write_orders")
-      ) {
-        console.error(
-          "BUNDLECART ORDER ADDRESS REWRITE BLOCKED BY MISSING SCOPE",
+      console.log("BUNDLECART REWRITE CHECK START", normalizedShopDomain, orderId);
+      console.log("BUNDLECART REWRITE CHECK FLAGS", {
+        bundlecartSelected,
+        bundlecartPaid: bundleCartSelection.paid,
+        shopDomain: normalizedShopDomain,
+        orderId,
+        hasWarehouseAddress: hasWarehouseAddressFromRuntime,
+        hasAccessToken,
+        merchantFound,
+        linkedOrderPersistenceDone
+      });
+
+      if (bundlecartSelected === true && accessToken && warehouseAddress) {
+        console.log(
+          "BUNDLECART REWRITE USING RUNTIME WAREHOUSE",
           normalizedShopDomain,
-          orderId,
-          "write_orders"
+          orderId
         );
+        console.log(
+          "BUNDLECART ORDER ADDRESS REWRITE INVOKE",
+          normalizedShopDomain,
+          orderId
+        );
+        console.log(
+          "BUNDLECART ORDER ADDRESS REWRITE START",
+          normalizedShopDomain,
+          orderId
+        );
+        try {
+          await updateOrderShippingAddressToWarehouse(
+            normalizedShopDomain,
+            accessToken,
+            orderId,
+            warehouseAddress
+          );
+          console.log(
+            "BUNDLECART ORDER ADDRESS REWRITE SUCCESS",
+            normalizedShopDomain,
+            orderId
+          );
+        } catch (error) {
+          console.error(
+            "BUNDLECART ORDER ADDRESS REWRITE ERROR",
+            normalizedShopDomain,
+            orderId,
+            error
+          );
+          const rewriteErrorMessage = String(error?.message || error || "").toLowerCase();
+          if (
+            rewriteErrorMessage.includes("status_403") &&
+            rewriteErrorMessage.includes("write_orders")
+          ) {
+            console.error(
+              "BUNDLECART ORDER ADDRESS REWRITE BLOCKED BY MISSING SCOPE",
+              normalizedShopDomain,
+              orderId,
+              "write_orders"
+            );
+          }
+        }
       }
     }
-  }
-
-  console.log("DB STEP shopify_orders insert");
-  const result = await dbPool.query(INSERT_SHOPIFY_ORDER_SQL, [
-    normalizedShopDomain,
-    orderId,
-    order.email || null,
-    createdAt,
-    totalPrice,
-    order.currency || null,
-    webhookId || null,
-    rawPayload
-  ]);
-
-  if (result.rowCount > 0) {
-    console.log(`ORDER SAVED id=${orderId} shop=${shopDomain}`);
-  } else {
-    console.log("ORDER DUPLICATE IGNORED");
   }
 }
 
