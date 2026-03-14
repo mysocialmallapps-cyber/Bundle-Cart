@@ -176,7 +176,7 @@ export default function BundlesPage({ notify }) {
             checked={form.secondOrderFreeShipping}
             onChange={updateForm}
           />
-          $5 first order network fee, then free linked orders within 72h
+          Pay once • bundle more orders free for 72h
         </label>
         <label className="checkbox-label">
           <input type="checkbox" name="isActive" checked={form.isActive} onChange={updateForm} />

@@ -17,7 +17,7 @@ const BUNDLECART_PAID_RATE = {
   service_code: "BUNDLECART_PAID",
   total_price: "500",
   description:
-    "Start your bundle for a fixed $5 network fee. Additional orders in the next 72 hours ship free together."
+    "Pay shipping once. Add more orders in the next 72 hours with free BundleCart shipping."
 };
 const BUNDLECART_FREE_RATE = {
   service_name: "BundleCart",
