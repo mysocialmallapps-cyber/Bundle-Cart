@@ -1,5 +1,5 @@
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
-import AdminBundlesPage from "./pages/AdminBundlesPage";
+import BundlesPage from "./pages/BundlesPage";
 import AdminBundleDetailPage from "./pages/AdminBundleDetailPage";
 
 const NAV_ITEMS = [{ to: "/admin/bundles", label: "Bundles" }];
@@ -25,8 +25,8 @@ export default function App() {
 
       <main className="main">
         <header className="topbar">
-          <h2>Bundle Operations</h2>
-          <p>Monitor bundle status, warehouse assignment, and linked orders.</p>
+          <h2>Bundle Network Operations</h2>
+          <p>Monitor active bundle windows, first-order fees, and linked free orders.</p>
         </header>
 
         <section className="page-content">
@@ -34,7 +34,7 @@ export default function App() {
             <Route path="/" element={<Navigate to="/admin/bundles" replace />} />
             <Route path="/admin" element={<Navigate to="/admin/bundles" replace />} />
             <Route path="/admin/dashboard" element={<Navigate to="/admin/bundles" replace />} />
-            <Route path="/admin/bundles" element={<AdminBundlesPage />} />
+            <Route path="/admin/bundles" element={<BundlesPage />} />
             <Route path="/admin/bundles/:id" element={<AdminBundleDetailPage />} />
             <Route path="/admin/*" element={<Navigate to="/admin/bundles" replace />} />
           </Routes>

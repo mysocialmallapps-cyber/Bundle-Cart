@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
-import { formatAddress, formatDateTime, getCustomerName, parseMaybeJson } from "./adminUtils";
+import { formatDateTime } from "./adminUtils";
 
 function normalizeOrder(order) {
   return {
@@ -53,16 +53,15 @@ export default function AdminBundleDetailPage() {
     };
   }, [bundleId]);
 
-  const customerAddress = useMemo(
-    () => parseMaybeJson(bundle?.customer_address_json),
-    [bundle?.customer_address_json]
-  );
-  const warehouseAddress = useMemo(
-    () => parseMaybeJson(bundle?.warehouse_address_json),
-    [bundle?.warehouse_address_json]
-  );
-  const customerName = getCustomerName(customerAddress);
   const orderCount = Number(bundle?.order_count || orders.length || 0);
+  const firstFeeOrder = useMemo(
+    () => orders.find((order) => order.bundlecart_paid) || null,
+    [orders]
+  );
+  const linkedFreeOrders = useMemo(
+    () => orders.filter((order) => order.bundlecart_selected && !order.bundlecart_paid),
+    [orders]
+  );
 
   return (
     <div className="page">
@@ -87,38 +86,14 @@ export default function AdminBundleDetailPage() {
               <p className="detail-label">Bundle Status</p>
               <span
                 className={`status-pill ${
-                  bundle.bundle_status === "READY_TO_SHIP" ? "status-ready" : "status-open"
+                  bundle.bundle_status === "EXPIRED" ? "status-expired" : "status-open"
                 }`}
               >
                 {bundle.bundle_status || "OPEN"}
               </span>
             </div>
             <div>
-              <p className="detail-label">Customer Name</p>
-              <strong>{customerName}</strong>
-            </div>
-            <div>
-              <p className="detail-label">Customer Email</p>
-              <strong>{bundle.email || customerAddress.email || "N/A"}</strong>
-            </div>
-            <div>
-              <p className="detail-label">Customer Destination Address</p>
-              <strong>{formatAddress(customerAddress)}</strong>
-            </div>
-            <div>
-              <p className="detail-label">Address Hash (admin/debug only)</p>
-              <strong>{bundle.address_hash || "N/A"}</strong>
-            </div>
-            <div>
-              <p className="detail-label">Warehouse Region</p>
-              <strong>{bundle.warehouse_region || "N/A"}</strong>
-            </div>
-            <div>
-              <p className="detail-label">Warehouse Address</p>
-              <strong>{formatAddress(warehouseAddress)}</strong>
-            </div>
-            <div>
-              <p className="detail-label">Bundle Opened</p>
+              <p className="detail-label">Bundle Started</p>
               <strong>{formatDateTime(bundle.bundlecart_paid_at)}</strong>
             </div>
             <div>
@@ -126,13 +101,21 @@ export default function AdminBundleDetailPage() {
               <strong>{formatDateTime(bundle.active_until)}</strong>
             </div>
             <div>
-              <p className="detail-label">Orders in Bundle</p>
+              <p className="detail-label">Linked Orders</p>
               <strong>{orderCount}</strong>
+            </div>
+            <div>
+              <p className="detail-label">First Bundle Fee Order</p>
+              <strong>{firstFeeOrder?.shopify_order_id || "N/A"}</strong>
+            </div>
+            <div>
+              <p className="detail-label">Linked Free Orders</p>
+              <strong>{linkedFreeOrders.length}</strong>
             </div>
           </div>
 
           <div className="card">
-            <h4>Orders in Bundle</h4>
+            <h4>Linked Orders</h4>
             {orders.length === 0 ? (
               <p className="empty-state">No linked orders available for this bundle.</p>
             ) : (
@@ -141,22 +124,20 @@ export default function AdminBundleDetailPage() {
                   <thead>
                     <tr>
                       <th>Shopify Order ID</th>
-                      <th>Shop Domain</th>
                       <th>Order Created At</th>
-                      <th>BundleCart Selected</th>
-                      <th>BundleCart Paid</th>
-                      <th>Order Email</th>
+                      <th>First Bundle Fee</th>
+                      <th>Linked Free</th>
+                      <th>Shop Domain</th>
                     </tr>
                   </thead>
                   <tbody>
                     {orders.map((order) => (
                       <tr key={order.id || `${order.shopify_order_id}-${order.shop_domain}`}>
                         <td>{order.shopify_order_id || "N/A"}</td>
-                        <td>{order.shop_domain || "N/A"}</td>
                         <td>{formatDateTime(order.order_created_at || order.created_at)}</td>
-                        <td>{order.bundlecart_selected ? "Yes" : "No"}</td>
-                        <td>{order.bundlecart_paid ? "Yes" : "No"}</td>
-                        <td>{order.email || "N/A"}</td>
+                        <td>{order.bundlecart_paid ? "Yes ($5)" : "No"}</td>
+                        <td>{order.bundlecart_selected && !order.bundlecart_paid ? "Yes ($0)" : "No"}</td>
+                        <td>{order.shop_domain || "N/A"}</td>
                       </tr>
                     ))}
                   </tbody>

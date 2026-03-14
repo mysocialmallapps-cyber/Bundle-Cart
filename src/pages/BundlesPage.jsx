@@ -1,17 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api";
+import { formatDateTime } from "./adminUtils";
 
-const DEFAULT_FORM = {
-  title: "",
-  productHandles: "",
-  discountPercent: "10",
-  secondOrderFreeShipping: true,
-  isActive: true
-};
+const ONE_MINUTE_MS = 60 * 1000;
+const ONE_HOUR_MS = 60 * ONE_MINUTE_MS;
+const ONE_DAY_MS = 24 * ONE_HOUR_MS;
+const FIRST_ORDER_FEE_USD = 5;
 
 function toArray(payload) {
   if (Array.isArray(payload)) {
     return payload;
+  }
+  if (Array.isArray(payload?.bundles)) {
+    return payload.bundles;
   }
   if (Array.isArray(payload?.data)) {
     return payload.data;
@@ -19,251 +21,229 @@ function toArray(payload) {
   return [];
 }
 
-function normalizeBundleInput(form) {
+function normalizeBundle(bundle) {
   return {
-    title: form.title.trim(),
-    productHandles: form.productHandles
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean),
-    discountPercent: Number(form.discountPercent),
-    secondOrderFreeShipping: Boolean(form.secondOrderFreeShipping),
-    isActive: Boolean(form.isActive)
+    ...bundle,
+    status: bundle.bundle_status || "OPEN",
+    orderCount: Number(bundle.order_count || 0)
   };
 }
 
-export default function BundlesPage({ notify }) {
+function formatTimeRemaining(activeUntil) {
+  if (!activeUntil) {
+    return { label: "N/A", tone: "neutral" };
+  }
+
+  const expiresAt = new Date(activeUntil).getTime();
+  if (Number.isNaN(expiresAt)) {
+    return { label: "N/A", tone: "neutral" };
+  }
+
+  const remainingMs = expiresAt - Date.now();
+  if (remainingMs <= 0) {
+    return { label: "Expired", tone: "expired" };
+  }
+
+  const totalMinutes = Math.floor(remainingMs / ONE_MINUTE_MS);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  return {
+    label: `${hours}h ${minutes}m`,
+    tone: remainingMs < ONE_DAY_MS ? "warning" : "neutral"
+  };
+}
+
+function getRemainingTimeMs(activeUntil, nowMs) {
+  if (!activeUntil) {
+    return null;
+  }
+  const expiresAt = new Date(activeUntil).getTime();
+  if (Number.isNaN(expiresAt)) {
+    return null;
+  }
+  return expiresAt - nowMs;
+}
+
+function compareBundlesByUrgency(a, b, nowMs) {
+  const aRemaining = getRemainingTimeMs(a.active_until, nowMs);
+  const bRemaining = getRemainingTimeMs(b.active_until, nowMs);
+
+  const aExpired = aRemaining !== null && aRemaining <= 0;
+  const bExpired = bRemaining !== null && bRemaining <= 0;
+
+  if (aExpired !== bExpired) {
+    return aExpired ? -1 : 1;
+  }
+  if (aExpired && bExpired) {
+    return aRemaining - bRemaining;
+  }
+  if (aRemaining === null && bRemaining === null) {
+    return Number(a.id || 0) - Number(b.id || 0);
+  }
+  if (aRemaining === null) {
+    return 1;
+  }
+  if (bRemaining === null) {
+    return -1;
+  }
+  return aRemaining - bRemaining;
+}
+
+function formatMoney(value) {
+  return `$${value.toFixed(2)}`;
+}
+
+export default function BundlesPage() {
   const [bundles, setBundles] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [editingId, setEditingId] = useState(null);
-  const [form, setForm] = useState(DEFAULT_FORM);
   const [error, setError] = useState("");
-
-  async function loadBundles() {
-    try {
-      setError("");
-      const payload = await api.getBundles();
-      setBundles(toArray(payload));
-    } catch (requestError) {
-      setError(requestError.message);
-      notify.error("Failed to load bundles.");
-    } finally {
-      setLoading(false);
-    }
-  }
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
-    loadBundles();
+    console.log("BUNDLE DASHBOARD PAGE LOAD");
+    let mounted = true;
+
+    api
+      .getAdminBundles()
+      .then((payload) => {
+        if (!mounted) {
+          return;
+        }
+        setBundles(toArray(payload).map(normalizeBundle));
+      })
+      .catch((requestError) => {
+        if (!mounted) {
+          return;
+        }
+        setError(requestError.message || "Failed to load bundles");
+      })
+      .finally(() => {
+        if (!mounted) {
+          return;
+        }
+        setLoading(false);
+      });
+
+    return () => {
+      mounted = false;
+    };
   }, []);
 
-  const submitLabel = useMemo(
-    () => (saving ? "Saving..." : editingId ? "Update Bundle" : "Create Bundle"),
-    [editingId, saving]
-  );
+  const metrics = useMemo(() => {
+    const totalBundles = bundles.length;
+    const totalOrders = bundles.reduce((sum, bundle) => sum + bundle.orderCount, 0);
+    const activeBundles = bundles.filter((bundle) => bundle.status === "OPEN").length;
+    const linkedFreeOrders = bundles.reduce(
+      (sum, bundle) => sum + Math.max(bundle.orderCount - 1, 0),
+      0
+    );
+    const firstOrderBundleFeesCollected = bundles.reduce((sum, bundle) => {
+      return sum + (bundle.orderCount > 0 ? FIRST_ORDER_FEE_USD : 0);
+    }, 0);
 
-  function updateForm(event) {
-    const { name, value, type, checked } = event.target;
-    setForm((current) => ({
-      ...current,
-      [name]: type === "checkbox" ? checked : value
-    }));
-  }
+    return {
+      activeBundles,
+      totalBundles,
+      linkedFreeOrders,
+      firstOrderBundleFeesCollected,
+      averageOrdersPerBundle: totalBundles > 0 ? totalOrders / totalBundles : 0
+    };
+  }, [bundles]);
 
-  async function handleSubmit(event) {
-    event.preventDefault();
-    if (!form.title.trim()) {
-      notify.error("Bundle title is required.");
-      return;
-    }
-
-    setSaving(true);
-    try {
-      const payload = normalizeBundleInput(form);
-      if (editingId) {
-        await api.updateBundle(editingId, payload);
-        notify.success("Bundle updated.");
-      } else {
-        await api.createBundle(payload);
-        notify.success("Bundle created.");
+  const filteredBundles = useMemo(() => {
+    const nowMs = Date.now();
+    const search = query.trim().toLowerCase();
+    const matchingBundles = bundles.filter((bundle) => {
+      if (!search) {
+        return true;
       }
-      setForm(DEFAULT_FORM);
-      setEditingId(null);
-      await loadBundles();
-    } catch (requestError) {
-      notify.error(requestError.message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  function handleEdit(bundle) {
-    setEditingId(bundle.id);
-    setForm({
-      title: bundle.title || bundle.name || "",
-      productHandles: Array.isArray(bundle.productHandles)
-        ? bundle.productHandles.join(", ")
-        : Array.isArray(bundle.products)
-          ? bundle.products.map((item) => item.handle || item.title).filter(Boolean).join(", ")
-          : "",
-      discountPercent: String(bundle.discountPercent ?? bundle.discountValue ?? 10),
-      secondOrderFreeShipping: Boolean(
-        bundle.secondOrderFreeShipping ?? bundle.freeShippingOnSecondOrder ?? true
-      ),
-      isActive: Boolean(bundle.isActive ?? bundle.status === "active" ?? true)
+      return String(bundle.id || "")
+        .toLowerCase()
+        .includes(search);
     });
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }
 
-  async function handleDelete(bundleId) {
-    const confirmed = window.confirm("Delete this bundle?");
-    if (!confirmed) {
-      return;
-    }
-
-    try {
-      await api.deleteBundle(bundleId);
-      notify.success("Bundle deleted.");
-      await loadBundles();
-    } catch (requestError) {
-      notify.error(requestError.message);
-    }
-  }
+    return matchingBundles.slice().sort((a, b) => compareBundlesByUrgency(a, b, nowMs));
+  }, [bundles, query]);
 
   return (
     <div className="page">
       <div className="page-header">
-        <h3>Bundle Management</h3>
+        <h3>Bundles</h3>
       </div>
 
-      <form className="card form-grid" onSubmit={handleSubmit}>
-        <h4>{editingId ? "Edit Bundle" : "Create Bundle"}</h4>
-        <label>
-          Bundle Title
-          <input
-            name="title"
-            value={form.title}
-            onChange={updateForm}
-            placeholder="Weekend Family Bundle"
-            required
-          />
-        </label>
-        <label>
-          Product Handles (comma separated)
-          <input
-            name="productHandles"
-            value={form.productHandles}
-            onChange={updateForm}
-            placeholder="coffee-beans, ceramic-mug"
-          />
-        </label>
-        <label>
-          Discount Percent
-          <input
-            type="number"
-            min="0"
-            max="100"
-            name="discountPercent"
-            value={form.discountPercent}
-            onChange={updateForm}
-          />
-        </label>
-
-        <label className="checkbox-label">
-          <input
-            type="checkbox"
-            name="secondOrderFreeShipping"
-            checked={form.secondOrderFreeShipping}
-            onChange={updateForm}
-          />
-          Pay once • bundle more orders free for 72h
-        </label>
-        <label className="checkbox-label">
-          <input type="checkbox" name="isActive" checked={form.isActive} onChange={updateForm} />
-          Bundle active
-        </label>
-        <div className="form-actions">
-          <button type="submit" className="button button-primary" disabled={saving}>
-            {submitLabel}
-          </button>
-          {editingId ? (
-            <button
-              type="button"
-              className="button button-secondary"
-              onClick={() => {
-                setEditingId(null);
-                setForm(DEFAULT_FORM);
-              }}
-            >
-              Cancel Edit
-            </button>
-          ) : null}
-        </div>
-      </form>
+      <div className="stats-grid stats-grid-small">
+        <article className="card stat-card">
+          <p>Active Bundles</p>
+          <strong>{metrics.activeBundles}</strong>
+        </article>
+        <article className="card stat-card">
+          <p>Total Bundles</p>
+          <strong>{metrics.totalBundles}</strong>
+        </article>
+        <article className="card stat-card">
+          <p>Linked Free Orders</p>
+          <strong>{metrics.linkedFreeOrders}</strong>
+        </article>
+        <article className="card stat-card">
+          <p>First-Order BundleCart Fees Collected</p>
+          <strong>{formatMoney(metrics.firstOrderBundleFeesCollected)}</strong>
+        </article>
+        <article className="card stat-card">
+          <p>Average Orders Per Bundle</p>
+          <strong>{metrics.averageOrdersPerBundle.toFixed(2)}</strong>
+        </article>
+      </div>
 
       <div className="card">
         <div className="card-header-inline">
-          <h4>Active Bundles</h4>
-          <button type="button" className="button button-secondary" onClick={loadBundles}>
-            Refresh
-          </button>
+          <h4>Bundle Windows</h4>
+          <input
+            className="admin-search-input"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Filter by bundle id"
+          />
         </div>
-        {error ? <p className="inline-error">{error}</p> : null}
+
         {loading ? <p>Loading bundles...</p> : null}
-        {!loading && bundles.length === 0 ? (
-          <p className="empty-state">No bundles yet. Create your first bundle above.</p>
+        {!loading && error ? <p className="inline-error">{error}</p> : null}
+        {!loading && !error && filteredBundles.length === 0 ? (
+          <p className="empty-state">No bundles match the current search.</p>
         ) : null}
-        {!loading && bundles.length > 0 ? (
+
+        {!loading && !error && filteredBundles.length > 0 ? (
           <div className="table-wrapper">
             <table>
               <thead>
                 <tr>
-                  <th>Title</th>
-                  <th>Products</th>
-                  <th>Discount</th>
-                  <th>Second-order Free Shipping</th>
-                  <th>Status</th>
-                  <th>Actions</th>
+                  <th>Bundle ID</th>
+                  <th>Order Count</th>
+                  <th>First Bundle Fee</th>
+                  <th>Bundle Started</th>
+                  <th>Bundle Expires</th>
+                  <th>Time Remaining</th>
                 </tr>
               </thead>
               <tbody>
-                {bundles.map((bundle) => {
-                  const productCount = Array.isArray(bundle.productHandles)
-                    ? bundle.productHandles.length
-                    : Array.isArray(bundle.products)
-                      ? bundle.products.length
-                      : 0;
-                  const active = Boolean(bundle.isActive ?? bundle.status === "active");
+                {filteredBundles.map((bundle) => {
+                  const timeRemaining = formatTimeRemaining(bundle.active_until);
+                  const firstBundleFee = bundle.orderCount > 0 ? FIRST_ORDER_FEE_USD : 0;
                   return (
-                    <tr key={bundle.id}>
-                      <td>{bundle.title || bundle.name || `Bundle #${bundle.id}`}</td>
-                      <td>{productCount}</td>
-                      <td>{bundle.discountPercent ?? bundle.discountValue ?? 0}%</td>
+                    <tr key={bundle.id} className="clickable-row">
                       <td>
-                        {Boolean(bundle.secondOrderFreeShipping ?? bundle.freeShippingOnSecondOrder)
-                          ? "Enabled"
-                          : "Disabled"}
+                        <Link to={`/admin/bundles/${bundle.id}`} className="row-link">
+                          {bundle.id}
+                        </Link>
                       </td>
+                      <td>{bundle.orderCount}</td>
+                      <td>{formatMoney(firstBundleFee)}</td>
+                      <td>{formatDateTime(bundle.bundlecart_paid_at)}</td>
+                      <td>{formatDateTime(bundle.active_until)}</td>
                       <td>
-                        <span className={`status-pill ${active ? "status-ok" : "status-neutral"}`}>
-                          {active ? "Live" : "Paused"}
+                        <span className={`time-remaining-pill time-remaining-${timeRemaining.tone}`}>
+                          {timeRemaining.label}
                         </span>
-                      </td>
-                      <td className="table-actions">
-                        <button
-                          type="button"
-                          className="button button-secondary"
-                          onClick={() => handleEdit(bundle)}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          className="button button-danger"
-                          onClick={() => handleDelete(bundle.id)}
-                        >
-                          Delete
-                        </button>
                       </td>
                     </tr>
                   );

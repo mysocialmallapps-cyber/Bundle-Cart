@@ -258,6 +258,11 @@ th {
   color: #0f766e;
 }
 
+.status-expired {
+  background: #fee2e2;
+  color: #b42318;
+}
+
 .status-neutral {
   background: #eceff4;
   color: #475467;
