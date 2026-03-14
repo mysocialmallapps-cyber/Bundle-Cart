@@ -13,14 +13,14 @@ const SHOPIFY_ADMIN_API_VERSION = "2026-01";
 const BUNDLECART_CARRIER_NAME = "BundleCart";
 const BUNDLECART_CALLBACK_URL = "https://bundle-cart.replit.app/api/shipping/rates";
 const BUNDLECART_PAID_RATE = {
-  service_name: "BundleCart",
+  service_name: "✨📦✨BundleCart",
   service_code: "BUNDLECART_PAID",
   total_price: "500",
   description:
     "Pay shipping once. Add more orders in the next 72 hours with free BundleCart shipping."
 };
 const BUNDLECART_FREE_RATE = {
-  service_name: "BundleCart",
+  service_name: "✨📦✨BundleCart",
   service_code: "BUNDLECART_FREE",
   total_price: "0",
   description:
