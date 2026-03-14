@@ -13,14 +13,14 @@ const SHOPIFY_ADMIN_API_VERSION = "2026-01";
 const BUNDLECART_CARRIER_NAME = "BundleCart";
 const BUNDLECART_CALLBACK_URL = "https://bundle-cart.replit.app/api/shipping/rates";
 const BUNDLECART_PAID_RATE = {
-  service_name: "✨📦✨BundleCart",
+  service_name: "BundleCart",
   service_code: "BUNDLECART_PAID",
   total_price: "500",
   description:
     "Pay shipping once. Add more orders in the next 72 hours with free BundleCart shipping."
 };
 const BUNDLECART_FREE_RATE = {
-  service_name: "✨📦✨BundleCart",
+  service_name: "BundleCart",
   service_code: "BUNDLECART_FREE",
   total_price: "0",
   description:
@@ -35,53 +35,6 @@ const BUNDLECART_EMAIL_WEBHOOK_URL = String(process.env.BUNDLECART_EMAIL_WEBHOOK
 const BUNDLECART_EMAIL_WEBHOOK_AUTH_TOKEN = String(
   process.env.BUNDLECART_EMAIL_WEBHOOK_AUTH_TOKEN || ""
 ).trim();
-const BUNDLECART_REGION_WAREHOUSES = {
-  US: {
-    name: "BundleCart US Warehouse",
-    address1: "21-38 44th Road",
-    city: "Long Island City",
-    province: "NY",
-    zip: "11101",
-    country: "United States",
-    country_code: "US"
-  },
-  UK: {
-    name: "BundleCart UK Warehouse",
-    address1: "1 Placeholder Street",
-    city: "London",
-    province: "",
-    zip: "SW1A 1AA",
-    country: "United Kingdom",
-    country_code: "GB"
-  },
-  EU: {
-    name: "BundleCart EU Warehouse",
-    address1: "10 Placeholder Avenue",
-    city: "Amsterdam",
-    province: "",
-    zip: "1012 AB",
-    country: "Netherlands",
-    country_code: "NL"
-  },
-  ASIA: {
-    name: "BundleCart Asia Warehouse",
-    address1: "88 Placeholder Road",
-    city: "Singapore",
-    province: "",
-    zip: "049213",
-    country: "Singapore",
-    country_code: "SG"
-  },
-  SA: {
-    name: "BundleCart SA Warehouse",
-    address1: "100 Placeholder Blvd",
-    city: "Sao Paulo",
-    province: "",
-    zip: "01000-000",
-    country: "Brazil",
-    country_code: "BR"
-  }
-};
 
 const CREATE_SHOPIFY_ORDERS_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS shopify_orders (
@@ -118,10 +71,7 @@ CREATE TABLE IF NOT EXISTS merchants (
   access_token TEXT,
   updated_at TIMESTAMP DEFAULT NOW(),
   merchant_country_code TEXT,
-  merchant_region TEXT,
-  warehouse_region TEXT,
-  warehouse_address_json JSONB,
-  location_id BIGINT
+  merchant_region TEXT
 );
 `;
 
@@ -139,14 +89,7 @@ CREATE TABLE IF NOT EXISTS link_groups (
   address_hash TEXT,
   bundlecart_paid_at TIMESTAMP,
   first_paid_order_id BIGINT,
-  customer_address_json JSONB,
-  warehouse_region TEXT,
-  warehouse_address_json JSONB,
-  shipment_status TEXT,
-  locked_at TIMESTAMP,
-  shipped_at TIMESTAMP,
-  tracking_number TEXT,
-  carrier TEXT
+  customer_address_json JSONB
 );
 `;
 
@@ -160,8 +103,6 @@ CREATE TABLE IF NOT EXISTS linked_orders (
   bundlecart_selected BOOLEAN DEFAULT FALSE,
   bundlecart_paid BOOLEAN DEFAULT FALSE,
   address_hash TEXT,
-  warehouse_region TEXT,
-  warehouse_address_json JSONB,
   created_at TIMESTAMP,
   inserted_at TIMESTAMP DEFAULT NOW()
 );
@@ -203,27 +144,7 @@ DO UPDATE SET
   access_token = COALESCE(NULLIF(EXCLUDED.access_token, ''), merchants.access_token),
   updated_at = NOW(),
   merchant_country_code = COALESCE(EXCLUDED.merchant_country_code, merchants.merchant_country_code),
-  merchant_region = COALESCE(EXCLUDED.merchant_region, merchants.merchant_region),
-  warehouse_region = COALESCE(EXCLUDED.warehouse_region, merchants.warehouse_region),
-  warehouse_address_json = COALESCE(EXCLUDED.warehouse_address_json, merchants.warehouse_address_json);
-`;
-
-const UPDATE_MERCHANT_REGION_ASSIGNMENT_SQL = `
-UPDATE merchants
-SET merchant_country_code = $1::text,
-    merchant_region = $2::text,
-    warehouse_region = $3::text,
-    warehouse_address_json = $4::jsonb,
-    location_id = $5::bigint,
-    updated_at = NOW()
-WHERE domain = $6::text;
-`;
-
-const SELECT_MERCHANT_WAREHOUSE_SQL = `
-SELECT domain, warehouse_region, warehouse_address_json, access_token
-FROM merchants
-WHERE domain = $1::text
-LIMIT 1;
+  merchant_region = COALESCE(EXCLUDED.merchant_region, merchants.merchant_region);
 `;
 
 const SELECT_RECENT_LINK_GROUP_SQL = `
@@ -376,18 +297,8 @@ WHERE id = $1::integer;
 
 const UPDATE_LINK_GROUP_METADATA_SQL = `
 UPDATE link_groups
-SET customer_address_json = $2::jsonb,
-    warehouse_region = $3::text,
-    warehouse_address_json = $4::jsonb
+SET customer_address_json = $2::jsonb
 WHERE id = $1::integer;
-`;
-
-const UPDATE_LINKED_ORDER_METADATA_SQL = `
-UPDATE linked_orders
-SET warehouse_region = $3::text,
-    warehouse_address_json = $4::jsonb
-WHERE shop_domain = $1::text
-  AND shopify_order_id = $2::bigint;
 `;
 
 const SELECT_DEBUG_LINKED_ORDERS_BY_EMAIL_SQL = `
@@ -413,9 +324,7 @@ ORDER BY ordinal_position;
 
 const EFFECTIVE_BUNDLE_STATUS_SQL = `
 CASE
-  WHEN lg.shipment_status = 'LOCKED' THEN 'LOCKED'
-  WHEN lg.shipment_status = 'SHIPPED' THEN 'SHIPPED'
-  WHEN lg.active_until IS NOT NULL AND lg.active_until <= NOW() THEN 'READY_TO_SHIP'
+  WHEN lg.active_until IS NOT NULL AND lg.active_until <= NOW() THEN 'EXPIRED'
   ELSE 'OPEN'
 END
 `;
@@ -425,8 +334,6 @@ SELECT
   lg.id,
   lg.email,
   lg.customer_address_json,
-  lg.warehouse_region,
-  lg.warehouse_address_json,
   lg.bundlecart_paid_at,
   lg.active_until,
   ${EFFECTIVE_BUNDLE_STATUS_SQL} AS bundle_status,
@@ -444,8 +351,6 @@ SELECT
   lg.id,
   lg.email,
   lg.customer_address_json,
-  lg.warehouse_region,
-  lg.warehouse_address_json,
   lg.bundlecart_paid_at,
   lg.active_until,
   ${EFFECTIVE_BUNDLE_STATUS_SQL} AS bundle_status,
@@ -453,7 +358,7 @@ SELECT
 FROM link_groups lg
 LEFT JOIN linked_orders lo
   ON lo.group_id = lg.id
-WHERE ${EFFECTIVE_BUNDLE_STATUS_SQL} = 'READY_TO_SHIP'
+WHERE ${EFFECTIVE_BUNDLE_STATUS_SQL} = 'EXPIRED'
 GROUP BY lg.id
 ORDER BY lg.created_at DESC
 LIMIT 100;
@@ -464,8 +369,6 @@ SELECT
   lg.id,
   lg.email,
   lg.customer_address_json,
-  lg.warehouse_region,
-  lg.warehouse_address_json,
   lg.bundlecart_paid_at,
   lg.active_until,
   lg.address_hash,
@@ -493,70 +396,11 @@ WHERE lo.group_id = $1::integer
 ORDER BY lo.created_at DESC NULLS LAST, lo.inserted_at DESC;
 `;
 
-const SELECT_WAREHOUSE_READY_BUNDLES_SQL = `
-SELECT
-  lg.id AS bundle_id,
-  ${EFFECTIVE_BUNDLE_STATUS_SQL} AS bundle_status,
-  COALESCE(
-    NULLIF(TRIM(CONCAT_WS(' ', lg.customer_address_json->>'first_name', lg.customer_address_json->>'last_name')), ''),
-    NULLIF(lg.customer_address_json->>'name', ''),
-    'Unknown'
-  ) AS customer_name,
-  lg.email AS customer_email,
-  lg.customer_address_json,
-  lg.warehouse_region,
-  lg.warehouse_address_json,
-  lg.bundlecart_paid_at,
-  lg.active_until,
-  COUNT(lo.id)::integer AS order_count
-FROM link_groups lg
-LEFT JOIN linked_orders lo
-  ON lo.group_id = lg.id
-WHERE ${EFFECTIVE_BUNDLE_STATUS_SQL} = 'READY_TO_SHIP'
-GROUP BY lg.id
-ORDER BY lg.active_until ASC;
-`;
-
-const SELECT_WAREHOUSE_BUNDLE_DETAIL_SQL = `
-SELECT
-  lg.id AS bundle_id,
-  ${EFFECTIVE_BUNDLE_STATUS_SQL} AS bundle_status,
-  COALESCE(
-    NULLIF(TRIM(CONCAT_WS(' ', lg.customer_address_json->>'first_name', lg.customer_address_json->>'last_name')), ''),
-    NULLIF(lg.customer_address_json->>'name', ''),
-    'Unknown'
-  ) AS customer_name,
-  lg.email AS customer_email,
-  lg.customer_address_json,
-  lg.warehouse_region,
-  lg.warehouse_address_json,
-  lg.bundlecart_paid_at,
-  lg.active_until,
-  COUNT(lo.id)::integer AS order_count
-FROM link_groups lg
-LEFT JOIN linked_orders lo
-  ON lo.group_id = lg.id
-WHERE lg.id = $1::integer
-GROUP BY lg.id
-LIMIT 1;
-`;
-
-const SELECT_BUNDLE_EFFECTIVE_STATUS_SQL = `
-SELECT
-  lg.id AS bundle_id,
-  ${EFFECTIVE_BUNDLE_STATUS_SQL} AS bundle_status
-FROM link_groups lg
-WHERE lg.id = $1::integer
-LIMIT 1;
-`;
-
 const SELECT_BUNDLE_NOTIFICATION_SUMMARY_SQL = `
 SELECT
   lg.id AS bundle_id,
   lg.email AS customer_email,
   lg.active_until,
-  lg.tracking_number,
-  lg.carrier,
   COUNT(lo.id)::integer AS order_count
 FROM link_groups lg
 LEFT JOIN linked_orders lo
@@ -564,53 +408,6 @@ LEFT JOIN linked_orders lo
 WHERE lg.id = $1::integer
 GROUP BY lg.id
 LIMIT 1;
-`;
-
-const UPDATE_BUNDLE_LOCK_SQL = `
-UPDATE link_groups lg
-SET shipment_status = 'LOCKED',
-    locked_at = NOW()
-WHERE lg.id = $1::integer
-  AND ${EFFECTIVE_BUNDLE_STATUS_SQL} = 'READY_TO_SHIP'
-RETURNING lg.id AS bundle_id;
-`;
-
-const UPDATE_BUNDLE_SHIPPED_SQL = `
-UPDATE link_groups lg
-SET shipment_status = 'SHIPPED',
-    shipped_at = NOW(),
-    tracking_number = $2::text,
-    carrier = $3::text
-WHERE lg.id = $1::integer
-  AND lg.shipment_status = 'LOCKED'
-RETURNING lg.id AS bundle_id;
-`;
-
-const SELECT_WAREHOUSE_ORDERS_FOR_BUNDLES_SQL = `
-SELECT
-  lo.group_id AS bundle_id,
-  lo.shop_domain,
-  lo.shopify_order_id,
-  lo.created_at AS order_created_at,
-  lo.bundlecart_selected,
-  lo.bundlecart_paid,
-  lo.email
-FROM linked_orders lo
-WHERE lo.group_id = ANY($1::integer[])
-ORDER BY lo.group_id ASC, lo.created_at DESC NULLS LAST, lo.inserted_at DESC;
-`;
-
-const SELECT_WAREHOUSE_ORDERS_FOR_BUNDLE_SQL = `
-SELECT
-  lo.shop_domain,
-  lo.shopify_order_id,
-  lo.created_at AS order_created_at,
-  lo.bundlecart_selected,
-  lo.bundlecart_paid,
-  lo.email
-FROM linked_orders lo
-WHERE lo.group_id = $1::integer
-ORDER BY lo.created_at DESC NULLS LAST, lo.inserted_at DESC;
 `;
 
 const ALTER_MERCHANTS_ADD_DOMAIN_SQL = `
@@ -647,18 +444,6 @@ ALTER TABLE merchants ADD COLUMN IF NOT EXISTS merchant_country_code TEXT;
 
 const ALTER_MERCHANTS_ADD_MERCHANT_REGION_SQL = `
 ALTER TABLE merchants ADD COLUMN IF NOT EXISTS merchant_region TEXT;
-`;
-
-const ALTER_MERCHANTS_ADD_WAREHOUSE_REGION_SQL = `
-ALTER TABLE merchants ADD COLUMN IF NOT EXISTS warehouse_region TEXT;
-`;
-
-const ALTER_MERCHANTS_ADD_WAREHOUSE_ADDRESS_JSON_SQL = `
-ALTER TABLE merchants ADD COLUMN IF NOT EXISTS warehouse_address_json JSONB;
-`;
-
-const ALTER_MERCHANTS_ADD_LOCATION_ID_SQL = `
-ALTER TABLE merchants ADD COLUMN IF NOT EXISTS location_id BIGINT;
 `;
 
 const BACKFILL_MERCHANT_DOMAIN_FROM_SHOP_DOMAIN_SQL = `
@@ -700,34 +485,6 @@ const ALTER_LINK_GROUPS_ADD_CUSTOMER_ADDRESS_JSON_SQL = `
 ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS customer_address_json JSONB;
 `;
 
-const ALTER_LINK_GROUPS_ADD_WAREHOUSE_REGION_SQL = `
-ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS warehouse_region TEXT;
-`;
-
-const ALTER_LINK_GROUPS_ADD_WAREHOUSE_ADDRESS_JSON_SQL = `
-ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS warehouse_address_json JSONB;
-`;
-
-const ALTER_LINK_GROUPS_ADD_SHIPMENT_STATUS_SQL = `
-ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS shipment_status TEXT;
-`;
-
-const ALTER_LINK_GROUPS_ADD_LOCKED_AT_SQL = `
-ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS locked_at TIMESTAMP;
-`;
-
-const ALTER_LINK_GROUPS_ADD_SHIPPED_AT_SQL = `
-ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS shipped_at TIMESTAMP;
-`;
-
-const ALTER_LINK_GROUPS_ADD_TRACKING_NUMBER_SQL = `
-ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS tracking_number TEXT;
-`;
-
-const ALTER_LINK_GROUPS_ADD_CARRIER_SQL = `
-ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS carrier TEXT;
-`;
-
 const ALTER_LINKED_ORDERS_ADD_GROUP_ID_SQL = `
 ALTER TABLE linked_orders
 ADD COLUMN IF NOT EXISTS group_id INTEGER REFERENCES link_groups(id) ON DELETE SET NULL;
@@ -755,14 +512,6 @@ ALTER TABLE linked_orders ADD COLUMN IF NOT EXISTS bundlecart_paid BOOLEAN DEFAU
 
 const ALTER_LINKED_ORDERS_ADD_ADDRESS_HASH_SQL = `
 ALTER TABLE linked_orders ADD COLUMN IF NOT EXISTS address_hash TEXT;
-`;
-
-const ALTER_LINKED_ORDERS_ADD_WAREHOUSE_REGION_SQL = `
-ALTER TABLE linked_orders ADD COLUMN IF NOT EXISTS warehouse_region TEXT;
-`;
-
-const ALTER_LINKED_ORDERS_ADD_WAREHOUSE_ADDRESS_JSON_SQL = `
-ALTER TABLE linked_orders ADD COLUMN IF NOT EXISTS warehouse_address_json JSONB;
 `;
 
 const ALTER_LINKED_ORDERS_ADD_CREATED_AT_SQL = `
@@ -838,77 +587,6 @@ const PROVINCE_CODE_NORMALIZATION = {
   ca: "ca"
 };
 
-const COUNTRY_NAME_TO_CODE = {
-  "united states": "US",
-  usa: "US",
-  us: "US",
-  "united kingdom": "GB",
-  uk: "GB",
-  "great britain": "GB",
-  singapore: "SG",
-  brazil: "BR",
-  netherlands: "NL",
-  canada: "CA",
-  mexico: "MX"
-};
-
-const REGION_US_CODES = new Set(["US", "CA", "MX"]);
-const REGION_UK_CODES = new Set(["GB"]);
-const REGION_EU_CODES = new Set([
-  "AT",
-  "BE",
-  "BG",
-  "HR",
-  "CY",
-  "CZ",
-  "DK",
-  "EE",
-  "FI",
-  "FR",
-  "DE",
-  "GR",
-  "HU",
-  "IE",
-  "IT",
-  "LV",
-  "LT",
-  "LU",
-  "MT",
-  "NL",
-  "PL",
-  "PT",
-  "RO",
-  "SK",
-  "SI",
-  "ES",
-  "SE"
-]);
-const REGION_ASIA_CODES = new Set([
-  "SG",
-  "JP",
-  "HK",
-  "CN",
-  "KR",
-  "IN",
-  "TH",
-  "MY",
-  "ID",
-  "VN",
-  "PH"
-]);
-const REGION_SA_CODES = new Set([
-  "BR",
-  "AR",
-  "CL",
-  "CO",
-  "PE",
-  "UY",
-  "PY",
-  "BO",
-  "EC",
-  "VE"
-]);
-
 function normalizeCountryCode(value) {
   const normalized = normalizeAddressValue(value);
   if (!normalized) {
@@ -923,40 +601,6 @@ function normalizeProvinceCode(value) {
     return "";
   }
   return PROVINCE_CODE_NORMALIZATION[normalized] || normalized;
-}
-
-function normalizeCountryCodeToIso(value) {
-  const normalized = normalizeAddressValue(value);
-  if (!normalized) {
-    return "";
-  }
-  if (normalized.length === 2) {
-    return normalized.toUpperCase();
-  }
-  return COUNTRY_NAME_TO_CODE[normalized] || "";
-}
-
-function mapCountryCodeToRegion(countryCodeInput) {
-  const countryCode = String(countryCodeInput || "").trim().toUpperCase();
-  if (!countryCode) {
-    return "US";
-  }
-  if (REGION_US_CODES.has(countryCode)) {
-    return "US";
-  }
-  if (REGION_UK_CODES.has(countryCode)) {
-    return "UK";
-  }
-  if (REGION_EU_CODES.has(countryCode)) {
-    return "EU";
-  }
-  if (REGION_ASIA_CODES.has(countryCode)) {
-    return "ASIA";
-  }
-  if (REGION_SA_CODES.has(countryCode)) {
-    return "SA";
-  }
-  return "US";
 }
 
 function buildCanonicalAddress(address) {
@@ -1135,28 +779,6 @@ async function sendBundleOrderAddedEmailNotification(bundleId, fallbackEmail) {
   }
 }
 
-async function sendBundleShippedEmailNotification(bundleId, fallbackCarrier, fallbackTrackingNumber) {
-  try {
-    const summary = await getBundleNotificationSummary(bundleId);
-    const recipient = String(summary?.customer_email || "").trim().toLowerCase();
-    const carrier = String(summary?.carrier || fallbackCarrier || "").trim() || "N/A";
-    const trackingNumber =
-      String(summary?.tracking_number || fallbackTrackingNumber || "").trim() || "N/A";
-    const subject = "Your BundleCart shipment is on the way";
-    const text = [
-      "Your consolidated BundleCart shipment is on the way.",
-      "",
-      `Bundle ID: ${bundleId}`,
-      `Carrier: ${carrier}`,
-      `Tracking number: ${trackingNumber}`
-    ].join("\n");
-    await sendBundleCartEmail({ to: recipient, subject, text });
-    console.log("BUNDLECART EMAIL BUNDLE SHIPPED", bundleId, recipient);
-  } catch (error) {
-    console.error("BUNDLECART EMAIL BUNDLE SHIPPED ERROR", bundleId, error);
-  }
-}
-
 function isBundleCartShippingLine(line) {
   const fields = [
     line?.title,
@@ -1217,147 +839,6 @@ function extractBundleCartSelection(order) {
     free: amount === 0,
     amount
   };
-}
-
-function getWarehouseForRegion(region) {
-  return BUNDLECART_REGION_WAREHOUSES[region] || BUNDLECART_REGION_WAREHOUSES.US;
-}
-
-async function detectMerchantRegion(shopDomain, accessToken) {
-  const normalizedShop = normalizeShopDomain(shopDomain);
-  const token = String(accessToken || "").trim();
-  if (!normalizedShop || !token) {
-    return { countryCode: "US", region: "US", locationId: null };
-  }
-
-  const headers = {
-    Accept: "application/json",
-    "X-Shopify-Access-Token": token
-  };
-
-  try {
-    const locationsResponse = await fetch(
-      `https://${normalizedShop}/admin/api/${SHOPIFY_ADMIN_API_VERSION}/locations.json`,
-      { method: "GET", headers }
-    );
-    if (locationsResponse.ok) {
-      const locationsPayload = await locationsResponse.json();
-      const locations = Array.isArray(locationsPayload?.locations)
-        ? locationsPayload.locations
-        : [];
-      const location = locations.find(
-        (item) =>
-          item &&
-          item.active !== false &&
-          (item.country_code || item.country || item.province_code || item.province)
-      );
-      if (location) {
-        const countryCode = normalizeCountryCodeToIso(
-          location.country_code || location.country
-        );
-        const region = mapCountryCodeToRegion(countryCode);
-        return {
-          countryCode: countryCode || "US",
-          region,
-          locationId:
-            location.id != null
-              ? Number.parseInt(String(location.id), 10) || null
-              : null
-        };
-      }
-    }
-  } catch (error) {
-    console.error("MERCHANT REGION DETECT ERROR", normalizedShop, error);
-  }
-
-  try {
-    const shopResponse = await fetch(
-      `https://${normalizedShop}/admin/api/${SHOPIFY_ADMIN_API_VERSION}/shop.json`,
-      { method: "GET", headers }
-    );
-    if (shopResponse.ok) {
-      const shopPayload = await shopResponse.json();
-      const countryCode = normalizeCountryCodeToIso(
-        shopPayload?.shop?.country_code || shopPayload?.shop?.country
-      );
-      const region = mapCountryCodeToRegion(countryCode);
-      return {
-        countryCode: countryCode || "US",
-        region,
-        locationId: null
-      };
-    }
-  } catch (error) {
-    console.error("MERCHANT REGION DETECT ERROR", normalizedShop, error);
-  }
-
-  return { countryCode: "US", region: "US", locationId: null };
-}
-
-async function updateOrderShippingAddressToWarehouse(
-  shopDomain,
-  accessToken,
-  shopifyOrderId,
-  warehouseAddress,
-  customerName
-) {
-  const normalizedShop = normalizeShopDomain(shopDomain);
-  const token = String(accessToken || "").trim();
-  const orderId = String(shopifyOrderId || "").trim();
-
-  if (!normalizedShop || !token || !orderId || !warehouseAddress) {
-    throw new Error("missing_rewrite_parameters");
-  }
-
-  const countryCode =
-    normalizeCountryCodeToIso(warehouseAddress.country_code || warehouseAddress.country) || "";
-  const parsedOrderId = Number.parseInt(orderId, 10);
-  const orderReference = Number.isFinite(parsedOrderId) ? parsedOrderId : orderId;
-  const normalizedCustomerName = String(customerName || "").trim();
-  const companyLabel = normalizedCustomerName
-    ? `BundleCart | ${normalizedCustomerName}`
-    : "BundleCart Shipment";
-  console.log("BUNDLECART LABEL MARKER APPLIED", normalizedShop, orderId);
-
-  const endpoint = `https://${normalizedShop}/admin/api/${SHOPIFY_ADMIN_API_VERSION}/orders/${orderId}.json`;
-  const payload = {
-    order: {
-      id: orderReference,
-      shipping_address: {
-        first_name: "BundleCart",
-        last_name: "Warehouse",
-        company: companyLabel,
-        address1: warehouseAddress.address1 || "",
-        address2: warehouseAddress.address2 || "",
-        city: warehouseAddress.city || "",
-        province: warehouseAddress.province || "",
-        zip: warehouseAddress.zip || "",
-        country: warehouseAddress.country || "",
-        country_code: countryCode,
-        phone: warehouseAddress.phone || ""
-      }
-    }
-  };
-
-  const response = await fetch(endpoint, {
-    method: "PUT",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      "X-Shopify-Access-Token": token
-    },
-    body: JSON.stringify(payload)
-  });
-
-  if (!response.ok) {
-    let details = "";
-    try {
-      details = await response.text();
-    } catch {
-      details = "";
-    }
-    throw new Error(`status_${response.status} ${details}`.trim());
-  }
 }
 
 async function registerBundleCartCarrierService({ shopDomain, accessToken }) {
@@ -1720,18 +1201,6 @@ export async function ensureLinkingTablesExist() {
     "merchants add merchant_region"
   );
   await runNonCriticalSchemaQuery(
-    ALTER_MERCHANTS_ADD_WAREHOUSE_REGION_SQL,
-    "merchants add warehouse_region"
-  );
-  await runNonCriticalSchemaQuery(
-    ALTER_MERCHANTS_ADD_WAREHOUSE_ADDRESS_JSON_SQL,
-    "merchants add warehouse_address_json"
-  );
-  await runNonCriticalSchemaQuery(
-    ALTER_MERCHANTS_ADD_LOCATION_ID_SQL,
-    "merchants add location_id"
-  );
-  await runNonCriticalSchemaQuery(
     BACKFILL_MERCHANT_DOMAIN_FROM_SHOP_DOMAIN_SQL,
     "merchants backfill domain from shop_domain"
   );
@@ -1749,13 +1218,6 @@ export async function ensureLinkingTablesExist() {
     await dbPool.query(ALTER_LINK_GROUPS_ADD_BUNDLECART_PAID_AT_SQL);
     await dbPool.query(ALTER_LINK_GROUPS_ADD_FIRST_PAID_ORDER_ID_SQL);
     await dbPool.query(ALTER_LINK_GROUPS_ADD_CUSTOMER_ADDRESS_JSON_SQL);
-    await dbPool.query(ALTER_LINK_GROUPS_ADD_WAREHOUSE_REGION_SQL);
-    await dbPool.query(ALTER_LINK_GROUPS_ADD_WAREHOUSE_ADDRESS_JSON_SQL);
-    await dbPool.query(ALTER_LINK_GROUPS_ADD_SHIPMENT_STATUS_SQL);
-    await dbPool.query(ALTER_LINK_GROUPS_ADD_LOCKED_AT_SQL);
-    await dbPool.query(ALTER_LINK_GROUPS_ADD_SHIPPED_AT_SQL);
-    await dbPool.query(ALTER_LINK_GROUPS_ADD_TRACKING_NUMBER_SQL);
-    await dbPool.query(ALTER_LINK_GROUPS_ADD_CARRIER_SQL);
     await dbPool.query(CREATE_LINK_GROUPS_INDEX_SQL);
     console.log("MIGRATION DONE link_groups");
     console.log("DB SCHEMA OK link_groups");
@@ -1773,8 +1235,6 @@ export async function ensureLinkingTablesExist() {
     await dbPool.query(ALTER_LINKED_ORDERS_ADD_BUNDLECART_SELECTED_SQL);
     await dbPool.query(ALTER_LINKED_ORDERS_ADD_BUNDLECART_PAID_SQL);
     await dbPool.query(ALTER_LINKED_ORDERS_ADD_ADDRESS_HASH_SQL);
-    await dbPool.query(ALTER_LINKED_ORDERS_ADD_WAREHOUSE_REGION_SQL);
-    await dbPool.query(ALTER_LINKED_ORDERS_ADD_WAREHOUSE_ADDRESS_JSON_SQL);
     await dbPool.query(ALTER_LINKED_ORDERS_ADD_CREATED_AT_SQL);
     await dbPool.query(ALTER_LINKED_ORDERS_ADD_INSERTED_AT_SQL);
     await dbPool.query(CREATE_LINKED_ORDERS_UNIQUE_INDEX_SQL);
@@ -1805,12 +1265,6 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
   const totalPrice = order.total_price != null ? String(order.total_price) : null;
   const paidAtTimestamp = createdAt || new Date().toISOString();
   const shippingAddress = getOrderShippingAddress(order);
-  const customerName = String(
-    shippingAddress?.name ||
-      order?.customer?.default_address?.name ||
-      [order?.customer?.first_name, order?.customer?.last_name].filter(Boolean).join(" ") ||
-      ""
-  ).trim();
   const { canonical: canonicalAddress, hasRequired: hasRequiredAddress } = buildCanonicalAddress(shippingAddress);
   const addressHash = hasRequiredAddress ? hashAddressCanonical(canonicalAddress) : "";
   console.log("BUNDLECART WEBHOOK CANONICAL ADDRESS", canonicalAddress);
@@ -1819,15 +1273,6 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
   console.log("BUNDLECART WEBHOOK EMAIL", email || "");
   console.log("BUNDLECART WEBHOOK ADDRESS INPUT", JSON.stringify(shippingAddress || {}));
   console.log("BUNDLECART WEBHOOK ADDRESS HASH", addressHash || "");
-  let warehouseRegion = "US";
-  let warehouseAddress = getWarehouseForRegion("US");
-  let runtimeWarehouseAssigned = false;
-  let merchantFound = false;
-  let merchantDomain = "";
-  let hasWarehouseAddress = false;
-  let hasAccessToken = false;
-  let merchantAccessToken = "";
-  let linkedOrderPersistenceDone = false;
   let bundleStartedEmailGroupId = null;
   let bundleOrderAddedEmailGroupId = null;
 
@@ -1837,44 +1282,9 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
     console.log("DB STEP merchants upsert");
     await dbPool.query(UPSERT_MERCHANT_SQL, [normalizedShopDomain]);
     console.log("MERCHANT UPSERTED", normalizedShopDomain);
-    try {
-      const merchantWarehouseResult = await dbPool.query(SELECT_MERCHANT_WAREHOUSE_SQL, [
-        normalizedShopDomain
-      ]);
-      if (merchantWarehouseResult.rowCount > 0) {
-        merchantFound = true;
-        const row = merchantWarehouseResult.rows[0];
-        merchantDomain = String(row?.domain || normalizedShopDomain);
-        merchantAccessToken = String(row?.access_token || "").trim();
-        hasAccessToken = Boolean(merchantAccessToken);
-        hasWarehouseAddress = Boolean(row?.warehouse_address_json);
-        const dbRegion = String(row?.warehouse_region || "").toUpperCase();
-        if (dbRegion) {
-          warehouseRegion = dbRegion;
-        }
-      }
-    } catch (error) {
-      console.error("MERCHANT WAREHOUSE LOAD ERROR", normalizedShopDomain, error);
-    }
   }
 
-  console.log("BUNDLECART REWRITE MERCHANT LOOKUP", {
-    domain: merchantDomain || normalizedShopDomain || "",
-    token_present: hasAccessToken,
-    warehouse_region: warehouseRegion || "",
-    warehouse_address_present: hasWarehouseAddress
-  });
-  console.log(
-    "BUNDLECART REWRITE TOKEN STATUS",
-    normalizedShopDomain,
-    hasAccessToken
-  );
-
   if (bundlecartSelected) {
-    runtimeWarehouseAssigned =
-      Boolean(warehouseAddress) && typeof warehouseAddress === "object";
-    console.log("BUNDLECART WAREHOUSE ASSIGNED", normalizedShopDomain, warehouseRegion);
-    console.log("BUNDLECART WAREHOUSE ADDRESS", safeJsonString(warehouseAddress));
     if (!addressHash) {
       console.log("BUNDLECART ADDRESS MISMATCH");
     } else {
@@ -1894,9 +1304,7 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
         await dbPool.query(UPDATE_LINK_GROUP_LAST_SEEN_SQL, [groupId]);
         await dbPool.query(UPDATE_LINK_GROUP_METADATA_SQL, [
           groupId,
-          JSON.stringify(shippingAddress || {}),
-          warehouseRegion,
-          JSON.stringify(warehouseAddress || {})
+          JSON.stringify(shippingAddress || {})
         ]);
         console.log("BUNDLECART CUSTOMER ADDRESS STORED");
       } else {
@@ -1923,9 +1331,7 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
         ]);
         await dbPool.query(UPDATE_LINK_GROUP_METADATA_SQL, [
           groupId,
-          JSON.stringify(shippingAddress || {}),
-          warehouseRegion,
-          JSON.stringify(warehouseAddress || {})
+          JSON.stringify(shippingAddress || {})
         ]);
         console.log("BUNDLECART CUSTOMER ADDRESS STORED");
       }
@@ -1952,15 +1358,8 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
         } else {
           console.log("LINKED_ORDER DUPLICATE", orderId);
         }
-        await dbPool.query(UPDATE_LINKED_ORDER_METADATA_SQL, [
-          normalizedShopDomain,
-          orderId,
-          warehouseRegion,
-          JSON.stringify(warehouseAddress || {})
-        ]);
       }
     }
-    linkedOrderPersistenceDone = true;
   } else {
     let groupId = null;
     if (!email) {
@@ -2006,106 +1405,22 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
   if (bundleOrderAddedEmailGroupId != null) {
     await sendBundleOrderAddedEmailNotification(bundleOrderAddedEmailGroupId, email);
   }
+  console.log("DB STEP shopify_orders insert");
+  const result = await dbPool.query(INSERT_SHOPIFY_ORDER_SQL, [
+    normalizedShopDomain,
+    orderId,
+    order.email || null,
+    createdAt,
+    totalPrice,
+    order.currency || null,
+    webhookId || null,
+    rawPayload
+  ]);
 
-  const hasWarehouseAddressFromRuntime =
-    runtimeWarehouseAssigned &&
-    Boolean(warehouseAddress) &&
-    typeof warehouseAddress === "object";
-  const accessToken = merchantAccessToken;
-  try {
-    console.log("DB STEP shopify_orders insert");
-    const result = await dbPool.query(INSERT_SHOPIFY_ORDER_SQL, [
-      normalizedShopDomain,
-      orderId,
-      order.email || null,
-      createdAt,
-      totalPrice,
-      order.currency || null,
-      webhookId || null,
-      rawPayload
-    ]);
-
-    if (result.rowCount > 0) {
-      console.log(`ORDER SAVED id=${orderId} shop=${shopDomain}`);
-    } else {
-      console.log("ORDER DUPLICATE IGNORED");
-    }
-  } finally {
-    if (bundlecartSelected) {
-      console.log("BUNDLECART POST-PERSIST START", normalizedShopDomain, orderId);
-      console.log(
-        "BUNDLECART POST-PERSIST LINKED_ORDER_DONE",
-        normalizedShopDomain,
-        orderId
-      );
-      console.log(
-        "BUNDLECART POST-PERSIST SHOPIFY_ORDER_SAVE_DONE",
-        normalizedShopDomain,
-        orderId
-      );
-      console.log("BUNDLECART REWRITE CHECK START", normalizedShopDomain, orderId);
-      console.log("BUNDLECART REWRITE CHECK FLAGS", {
-        bundlecartSelected,
-        bundlecartPaid: bundleCartSelection.paid,
-        shopDomain: normalizedShopDomain,
-        orderId,
-        hasWarehouseAddress: hasWarehouseAddressFromRuntime,
-        hasAccessToken,
-        merchantFound,
-        linkedOrderPersistenceDone
-      });
-
-      if (bundlecartSelected === true && accessToken && warehouseAddress) {
-        console.log(
-          "BUNDLECART REWRITE USING RUNTIME WAREHOUSE",
-          normalizedShopDomain,
-          orderId
-        );
-        console.log(
-          "BUNDLECART ORDER ADDRESS REWRITE INVOKE",
-          normalizedShopDomain,
-          orderId
-        );
-        console.log(
-          "BUNDLECART ORDER ADDRESS REWRITE START",
-          normalizedShopDomain,
-          orderId
-        );
-        try {
-          await updateOrderShippingAddressToWarehouse(
-            normalizedShopDomain,
-            accessToken,
-            orderId,
-            warehouseAddress,
-            customerName
-          );
-          console.log(
-            "BUNDLECART ORDER ADDRESS REWRITE SUCCESS",
-            normalizedShopDomain,
-            orderId
-          );
-        } catch (error) {
-          console.error(
-            "BUNDLECART ORDER ADDRESS REWRITE ERROR",
-            normalizedShopDomain,
-            orderId,
-            error
-          );
-          const rewriteErrorMessage = String(error?.message || error || "").toLowerCase();
-          if (
-            rewriteErrorMessage.includes("status_403") &&
-            rewriteErrorMessage.includes("write_orders")
-          ) {
-            console.error(
-              "BUNDLECART ORDER ADDRESS REWRITE BLOCKED BY MISSING SCOPE",
-              normalizedShopDomain,
-              orderId,
-              "write_orders"
-            );
-          }
-        }
-      }
-    }
+  if (result.rowCount > 0) {
+    console.log(`ORDER SAVED id=${orderId} shop=${shopDomain}`);
+  } else {
+    console.log("ORDER DUPLICATE IGNORED");
   }
 }
 
@@ -2336,30 +1651,6 @@ export function createApp() {
       await checkShopifyWriteOrdersScope(shop, accessToken);
 
       try {
-        const regionDetection = await detectMerchantRegion(shop, accessToken);
-        const detectedRegion = regionDetection.region || "US";
-        const detectedCountryCode = regionDetection.countryCode || "US";
-        const warehouseAddress = getWarehouseForRegion(detectedRegion);
-        await dbPool.query(UPDATE_MERCHANT_REGION_ASSIGNMENT_SQL, [
-          detectedCountryCode,
-          detectedRegion,
-          detectedRegion,
-          JSON.stringify(warehouseAddress),
-          regionDetection.locationId,
-          shop
-        ]);
-        console.log(
-          "MERCHANT REGION DETECTED",
-          shop,
-          detectedCountryCode,
-          detectedRegion
-        );
-        console.log("MERCHANT WAREHOUSE ASSIGNED", shop, detectedRegion);
-      } catch (error) {
-        console.error("MERCHANT REGION DETECT ERROR", shop, error);
-      }
-
-      try {
         await registerCarrierServiceForShop(shop, accessToken);
       } catch (error) {
         console.error("CARRIER SERVICE CREATE ERROR", shop, error);
@@ -2373,7 +1664,6 @@ export function createApp() {
 
   app.use("/api", express.json());
   app.use("/api/admin", requireBundleAdminAuth);
-  app.use("/api/warehouse", requireBundleAdminAuth);
 
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true, time: new Date().toISOString() });
@@ -2446,215 +1736,6 @@ export function createApp() {
     } catch (error) {
       console.error("BUNDLE DETAIL FETCH ERROR", error);
       res.status(500).json({ ok: false });
-    }
-  });
-
-  app.get("/api/warehouse/bundles/ready", async (_req, res) => {
-    console.log("BUNDLE WAREHOUSE READY FETCH");
-
-    if (!dbPool) {
-      res.json({ bundles: [] });
-      return;
-    }
-
-    try {
-      const bundlesResult = await dbPool.query(SELECT_WAREHOUSE_READY_BUNDLES_SQL);
-      const bundles = bundlesResult.rows.map((row) => ({
-        ...row,
-        orders: []
-      }));
-
-      const bundleIds = bundles
-        .map((bundle) => Number(bundle.bundle_id))
-        .filter((bundleId) => Number.isInteger(bundleId) && bundleId > 0);
-
-      if (bundleIds.length === 0) {
-        res.json({ bundles });
-        return;
-      }
-
-      const ordersResult = await dbPool.query(SELECT_WAREHOUSE_ORDERS_FOR_BUNDLES_SQL, [bundleIds]);
-      const ordersByBundleId = new Map();
-      for (const order of ordersResult.rows) {
-        const bundleId = Number(order.bundle_id);
-        if (!ordersByBundleId.has(bundleId)) {
-          ordersByBundleId.set(bundleId, []);
-        }
-        ordersByBundleId.get(bundleId).push({
-          shop_domain: order.shop_domain,
-          shopify_order_id: order.shopify_order_id,
-          order_created_at: order.order_created_at,
-          bundlecart_selected: order.bundlecart_selected,
-          bundlecart_paid: order.bundlecart_paid,
-          email: order.email
-        });
-      }
-
-      const responseBundles = bundles.map((bundle) => ({
-        ...bundle,
-        orders: ordersByBundleId.get(Number(bundle.bundle_id)) || []
-      }));
-
-      res.json({ bundles: responseBundles });
-    } catch (error) {
-      console.error("BUNDLE WAREHOUSE READY FETCH ERROR", error);
-      res.status(500).json({ bundles: [] });
-    }
-  });
-
-  app.get("/api/warehouse/bundles/:id", async (req, res) => {
-    const bundleId = Number.parseInt(req.params.id, 10);
-    if (!Number.isInteger(bundleId) || bundleId <= 0) {
-      res.status(400).json({ ok: false, message: "Invalid bundle id" });
-      return;
-    }
-
-    console.log("BUNDLE WAREHOUSE DETAIL FETCH", bundleId);
-
-    if (!dbPool) {
-      res.status(404).json({ ok: false, message: "Bundle not found" });
-      return;
-    }
-
-    try {
-      const [bundleResult, ordersResult] = await Promise.all([
-        dbPool.query(SELECT_WAREHOUSE_BUNDLE_DETAIL_SQL, [bundleId]),
-        dbPool.query(SELECT_WAREHOUSE_ORDERS_FOR_BUNDLE_SQL, [bundleId])
-      ]);
-
-      const bundleRow = bundleResult.rows[0];
-      if (!bundleRow) {
-        res.status(404).json({ ok: false, message: "Bundle not found" });
-        return;
-      }
-
-      const orders = ordersResult.rows.map((order) => ({
-        shop_domain: order.shop_domain,
-        shopify_order_id: order.shopify_order_id,
-        order_created_at: order.order_created_at,
-        bundlecart_selected: order.bundlecart_selected,
-        bundlecart_paid: order.bundlecart_paid,
-        email: order.email
-      }));
-
-      res.json({
-        bundle: {
-          ...bundleRow,
-          orders
-        }
-      });
-    } catch (error) {
-      console.error("BUNDLE WAREHOUSE DETAIL FETCH ERROR", error);
-      res.status(500).json({ ok: false });
-    }
-  });
-
-  app.post("/api/warehouse/bundles/:id/lock", async (req, res) => {
-    const bundleId = Number.parseInt(req.params.id, 10);
-    console.log("BUNDLE WAREHOUSE LOCK REQUEST", bundleId);
-
-    if (!Number.isInteger(bundleId) || bundleId <= 0) {
-      console.log("BUNDLE WAREHOUSE LOCK FAIL", bundleId, "invalid_bundle_id");
-      res.status(400).json({ ok: false, error: "Invalid bundle id" });
-      return;
-    }
-
-    if (!dbPool) {
-      console.log("BUNDLE WAREHOUSE LOCK FAIL", bundleId, "database_unavailable");
-      res.status(503).json({ ok: false, error: "Database unavailable" });
-      return;
-    }
-
-    try {
-      const statusResult = await dbPool.query(SELECT_BUNDLE_EFFECTIVE_STATUS_SQL, [bundleId]);
-      const bundle = statusResult.rows[0];
-      if (!bundle) {
-        console.log("BUNDLE WAREHOUSE LOCK FAIL", bundleId, "bundle_not_found");
-        res.status(404).json({ ok: false, error: "Bundle not found" });
-        return;
-      }
-      if (bundle.bundle_status !== "READY_TO_SHIP") {
-        console.log("BUNDLE WAREHOUSE LOCK FAIL", bundleId, "not_ready_to_ship");
-        res.status(400).json({ ok: false, error: "Bundle is not ready to ship" });
-        return;
-      }
-
-      const lockResult = await dbPool.query(UPDATE_BUNDLE_LOCK_SQL, [bundleId]);
-      if (!lockResult.rowCount) {
-        console.log("BUNDLE WAREHOUSE LOCK FAIL", bundleId, "lock_condition_failed");
-        res.status(400).json({ ok: false, error: "Bundle is not ready to ship" });
-        return;
-      }
-
-      console.log("BUNDLE WAREHOUSE LOCK SUCCESS", bundleId);
-      res.json({
-        ok: true,
-        bundle_id: bundleId,
-        bundle_status: "LOCKED"
-      });
-    } catch (error) {
-      console.log("BUNDLE WAREHOUSE LOCK FAIL", bundleId, "query_error");
-      console.error("BUNDLE WAREHOUSE LOCK ERROR", error);
-      res.status(500).json({ ok: false, error: "Internal server error" });
-    }
-  });
-
-  app.post("/api/warehouse/bundles/:id/shipped", async (req, res) => {
-    const bundleId = Number.parseInt(req.params.id, 10);
-    console.log("BUNDLE WAREHOUSE SHIPPED REQUEST", bundleId);
-
-    if (!Number.isInteger(bundleId) || bundleId <= 0) {
-      console.log("BUNDLE WAREHOUSE SHIPPED FAIL", bundleId, "invalid_bundle_id");
-      res.status(400).json({ ok: false, error: "Invalid bundle id" });
-      return;
-    }
-
-    if (!dbPool) {
-      console.log("BUNDLE WAREHOUSE SHIPPED FAIL", bundleId, "database_unavailable");
-      res.status(503).json({ ok: false, error: "Database unavailable" });
-      return;
-    }
-
-    const trackingNumber =
-      typeof req.body?.tracking_number === "string" ? req.body.tracking_number.trim() : "";
-    const carrier = typeof req.body?.carrier === "string" ? req.body.carrier.trim() : "";
-
-    try {
-      const statusResult = await dbPool.query(SELECT_BUNDLE_EFFECTIVE_STATUS_SQL, [bundleId]);
-      const bundle = statusResult.rows[0];
-      if (!bundle) {
-        console.log("BUNDLE WAREHOUSE SHIPPED FAIL", bundleId, "bundle_not_found");
-        res.status(404).json({ ok: false, error: "Bundle not found" });
-        return;
-      }
-      if (bundle.bundle_status !== "LOCKED") {
-        console.log("BUNDLE WAREHOUSE SHIPPED FAIL", bundleId, "not_locked");
-        res.status(400).json({ ok: false, error: "Bundle must be locked before shipping" });
-        return;
-      }
-
-      const shippedResult = await dbPool.query(UPDATE_BUNDLE_SHIPPED_SQL, [
-        bundleId,
-        trackingNumber || null,
-        carrier || null
-      ]);
-      if (!shippedResult.rowCount) {
-        console.log("BUNDLE WAREHOUSE SHIPPED FAIL", bundleId, "ship_condition_failed");
-        res.status(400).json({ ok: false, error: "Bundle must be locked before shipping" });
-        return;
-      }
-
-      console.log("BUNDLE WAREHOUSE SHIPPED SUCCESS", bundleId);
-      await sendBundleShippedEmailNotification(bundleId, carrier || null, trackingNumber || null);
-      res.json({
-        ok: true,
-        bundle_id: bundleId,
-        bundle_status: "SHIPPED"
-      });
-    } catch (error) {
-      console.log("BUNDLE WAREHOUSE SHIPPED FAIL", bundleId, "query_error");
-      console.error("BUNDLE WAREHOUSE SHIPPED ERROR", error);
-      res.status(500).json({ ok: false, error: "Internal server error" });
     }
   });
 
