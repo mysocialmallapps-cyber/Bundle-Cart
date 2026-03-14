@@ -451,6 +451,88 @@ WHERE lo.group_id = $1::integer
 ORDER BY lo.created_at DESC NULLS LAST, lo.inserted_at DESC;
 `;
 
+const SELECT_WAREHOUSE_READY_BUNDLES_SQL = `
+SELECT
+  lg.id AS bundle_id,
+  CASE
+    WHEN lg.active_until IS NOT NULL AND lg.active_until <= NOW() THEN 'READY_TO_SHIP'
+    ELSE 'OPEN'
+  END AS bundle_status,
+  COALESCE(
+    NULLIF(TRIM(CONCAT_WS(' ', lg.customer_address_json->>'first_name', lg.customer_address_json->>'last_name')), ''),
+    NULLIF(lg.customer_address_json->>'name', ''),
+    'Unknown'
+  ) AS customer_name,
+  lg.email AS customer_email,
+  lg.customer_address_json,
+  lg.warehouse_region,
+  lg.warehouse_address_json,
+  lg.bundlecart_paid_at,
+  lg.active_until,
+  COUNT(lo.id)::integer AS order_count
+FROM link_groups lg
+LEFT JOIN linked_orders lo
+  ON lo.group_id = lg.id
+WHERE lg.active_until IS NOT NULL
+  AND lg.active_until <= NOW()
+GROUP BY lg.id
+ORDER BY lg.active_until ASC;
+`;
+
+const SELECT_WAREHOUSE_BUNDLE_DETAIL_SQL = `
+SELECT
+  lg.id AS bundle_id,
+  CASE
+    WHEN lg.active_until IS NOT NULL AND lg.active_until <= NOW() THEN 'READY_TO_SHIP'
+    ELSE 'OPEN'
+  END AS bundle_status,
+  COALESCE(
+    NULLIF(TRIM(CONCAT_WS(' ', lg.customer_address_json->>'first_name', lg.customer_address_json->>'last_name')), ''),
+    NULLIF(lg.customer_address_json->>'name', ''),
+    'Unknown'
+  ) AS customer_name,
+  lg.email AS customer_email,
+  lg.customer_address_json,
+  lg.warehouse_region,
+  lg.warehouse_address_json,
+  lg.bundlecart_paid_at,
+  lg.active_until,
+  COUNT(lo.id)::integer AS order_count
+FROM link_groups lg
+LEFT JOIN linked_orders lo
+  ON lo.group_id = lg.id
+WHERE lg.id = $1::integer
+GROUP BY lg.id
+LIMIT 1;
+`;
+
+const SELECT_WAREHOUSE_ORDERS_FOR_BUNDLES_SQL = `
+SELECT
+  lo.group_id AS bundle_id,
+  lo.shop_domain,
+  lo.shopify_order_id,
+  lo.created_at AS order_created_at,
+  lo.bundlecart_selected,
+  lo.bundlecart_paid,
+  lo.email
+FROM linked_orders lo
+WHERE lo.group_id = ANY($1::integer[])
+ORDER BY lo.group_id ASC, lo.created_at DESC NULLS LAST, lo.inserted_at DESC;
+`;
+
+const SELECT_WAREHOUSE_ORDERS_FOR_BUNDLE_SQL = `
+SELECT
+  lo.shop_domain,
+  lo.shopify_order_id,
+  lo.created_at AS order_created_at,
+  lo.bundlecart_selected,
+  lo.bundlecart_paid,
+  lo.email
+FROM linked_orders lo
+WHERE lo.group_id = $1::integer
+ORDER BY lo.created_at DESC NULLS LAST, lo.inserted_at DESC;
+`;
+
 const ALTER_MERCHANTS_ADD_DOMAIN_SQL = `
 ALTER TABLE merchants ADD COLUMN IF NOT EXISTS domain TEXT;
 `;
@@ -2129,6 +2211,7 @@ export function createApp() {
 
   app.use("/api", express.json());
   app.use("/api/admin", requireBundleAdminAuth);
+  app.use("/api/warehouse", requireBundleAdminAuth);
 
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true, time: new Date().toISOString() });
@@ -2200,6 +2283,106 @@ export function createApp() {
       });
     } catch (error) {
       console.error("BUNDLE DETAIL FETCH ERROR", error);
+      res.status(500).json({ ok: false });
+    }
+  });
+
+  app.get("/api/warehouse/bundles/ready", async (_req, res) => {
+    console.log("BUNDLE WAREHOUSE READY FETCH");
+
+    if (!dbPool) {
+      res.json({ bundles: [] });
+      return;
+    }
+
+    try {
+      const bundlesResult = await dbPool.query(SELECT_WAREHOUSE_READY_BUNDLES_SQL);
+      const bundles = bundlesResult.rows.map((row) => ({
+        ...row,
+        orders: []
+      }));
+
+      const bundleIds = bundles
+        .map((bundle) => Number(bundle.bundle_id))
+        .filter((bundleId) => Number.isInteger(bundleId) && bundleId > 0);
+
+      if (bundleIds.length === 0) {
+        res.json({ bundles });
+        return;
+      }
+
+      const ordersResult = await dbPool.query(SELECT_WAREHOUSE_ORDERS_FOR_BUNDLES_SQL, [bundleIds]);
+      const ordersByBundleId = new Map();
+      for (const order of ordersResult.rows) {
+        const bundleId = Number(order.bundle_id);
+        if (!ordersByBundleId.has(bundleId)) {
+          ordersByBundleId.set(bundleId, []);
+        }
+        ordersByBundleId.get(bundleId).push({
+          shop_domain: order.shop_domain,
+          shopify_order_id: order.shopify_order_id,
+          order_created_at: order.order_created_at,
+          bundlecart_selected: order.bundlecart_selected,
+          bundlecart_paid: order.bundlecart_paid,
+          email: order.email
+        });
+      }
+
+      const responseBundles = bundles.map((bundle) => ({
+        ...bundle,
+        orders: ordersByBundleId.get(Number(bundle.bundle_id)) || []
+      }));
+
+      res.json({ bundles: responseBundles });
+    } catch (error) {
+      console.error("BUNDLE WAREHOUSE READY FETCH ERROR", error);
+      res.status(500).json({ bundles: [] });
+    }
+  });
+
+  app.get("/api/warehouse/bundles/:id", async (req, res) => {
+    const bundleId = Number.parseInt(req.params.id, 10);
+    if (!Number.isInteger(bundleId) || bundleId <= 0) {
+      res.status(400).json({ ok: false, message: "Invalid bundle id" });
+      return;
+    }
+
+    console.log("BUNDLE WAREHOUSE DETAIL FETCH", bundleId);
+
+    if (!dbPool) {
+      res.status(404).json({ ok: false, message: "Bundle not found" });
+      return;
+    }
+
+    try {
+      const [bundleResult, ordersResult] = await Promise.all([
+        dbPool.query(SELECT_WAREHOUSE_BUNDLE_DETAIL_SQL, [bundleId]),
+        dbPool.query(SELECT_WAREHOUSE_ORDERS_FOR_BUNDLE_SQL, [bundleId])
+      ]);
+
+      const bundleRow = bundleResult.rows[0];
+      if (!bundleRow) {
+        res.status(404).json({ ok: false, message: "Bundle not found" });
+        return;
+      }
+
+      const orders = ordersResult.rows.map((order) => ({
+        shop_domain: order.shop_domain,
+        shopify_order_id: order.shopify_order_id,
+        order_created_at: order.order_created_at,
+        bundlecart_selected: order.bundlecart_selected,
+        bundlecart_paid: order.bundlecart_paid,
+        email: order.email
+      }));
+
+      res.json({
+        bundle: {
+          ...bundleRow,
+          orders
+        }
+      });
+    } catch (error) {
+      console.error("BUNDLE WAREHOUSE DETAIL FETCH ERROR", error);
       res.status(500).json({ ok: false });
     }
   });
