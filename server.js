@@ -130,7 +130,12 @@ CREATE TABLE IF NOT EXISTS link_groups (
   first_paid_order_id BIGINT,
   customer_address_json JSONB,
   warehouse_region TEXT,
-  warehouse_address_json JSONB
+  warehouse_address_json JSONB,
+  shipment_status TEXT,
+  locked_at TIMESTAMP,
+  shipped_at TIMESTAMP,
+  tracking_number TEXT,
+  carrier TEXT
 );
 `;
 
@@ -368,6 +373,15 @@ WHERE table_schema = 'public' AND table_name = $1::text
 ORDER BY ordinal_position;
 `;
 
+const EFFECTIVE_BUNDLE_STATUS_SQL = `
+CASE
+  WHEN lg.shipment_status = 'LOCKED' THEN 'LOCKED'
+  WHEN lg.shipment_status = 'SHIPPED' THEN 'SHIPPED'
+  WHEN lg.active_until IS NOT NULL AND lg.active_until <= NOW() THEN 'READY_TO_SHIP'
+  ELSE 'OPEN'
+END
+`;
+
 const SELECT_ADMIN_BUNDLES_SQL = `
 SELECT
   lg.id,
@@ -377,10 +391,7 @@ SELECT
   lg.warehouse_address_json,
   lg.bundlecart_paid_at,
   lg.active_until,
-  CASE
-    WHEN lg.active_until IS NOT NULL AND lg.active_until <= NOW() THEN 'READY_TO_SHIP'
-    ELSE 'OPEN'
-  END AS bundle_status,
+  ${EFFECTIVE_BUNDLE_STATUS_SQL} AS bundle_status,
   COUNT(lo.id) AS order_count
 FROM link_groups lg
 LEFT JOIN linked_orders lo
@@ -399,16 +410,12 @@ SELECT
   lg.warehouse_address_json,
   lg.bundlecart_paid_at,
   lg.active_until,
-  CASE
-    WHEN lg.active_until IS NOT NULL AND lg.active_until <= NOW() THEN 'READY_TO_SHIP'
-    ELSE 'OPEN'
-  END AS bundle_status,
+  ${EFFECTIVE_BUNDLE_STATUS_SQL} AS bundle_status,
   COUNT(lo.id) AS order_count
 FROM link_groups lg
 LEFT JOIN linked_orders lo
   ON lo.group_id = lg.id
-WHERE lg.active_until IS NOT NULL
-  AND lg.active_until <= NOW()
+WHERE ${EFFECTIVE_BUNDLE_STATUS_SQL} = 'READY_TO_SHIP'
 GROUP BY lg.id
 ORDER BY lg.created_at DESC
 LIMIT 100;
@@ -424,10 +431,7 @@ SELECT
   lg.bundlecart_paid_at,
   lg.active_until,
   lg.address_hash,
-  CASE
-    WHEN lg.active_until IS NOT NULL AND lg.active_until <= NOW() THEN 'READY_TO_SHIP'
-    ELSE 'OPEN'
-  END AS bundle_status,
+  ${EFFECTIVE_BUNDLE_STATUS_SQL} AS bundle_status,
   COUNT(lo.id) AS order_count
 FROM link_groups lg
 LEFT JOIN linked_orders lo
@@ -454,10 +458,7 @@ ORDER BY lo.created_at DESC NULLS LAST, lo.inserted_at DESC;
 const SELECT_WAREHOUSE_READY_BUNDLES_SQL = `
 SELECT
   lg.id AS bundle_id,
-  CASE
-    WHEN lg.active_until IS NOT NULL AND lg.active_until <= NOW() THEN 'READY_TO_SHIP'
-    ELSE 'OPEN'
-  END AS bundle_status,
+  ${EFFECTIVE_BUNDLE_STATUS_SQL} AS bundle_status,
   COALESCE(
     NULLIF(TRIM(CONCAT_WS(' ', lg.customer_address_json->>'first_name', lg.customer_address_json->>'last_name')), ''),
     NULLIF(lg.customer_address_json->>'name', ''),
@@ -473,8 +474,7 @@ SELECT
 FROM link_groups lg
 LEFT JOIN linked_orders lo
   ON lo.group_id = lg.id
-WHERE lg.active_until IS NOT NULL
-  AND lg.active_until <= NOW()
+WHERE ${EFFECTIVE_BUNDLE_STATUS_SQL} = 'READY_TO_SHIP'
 GROUP BY lg.id
 ORDER BY lg.active_until ASC;
 `;
@@ -482,10 +482,7 @@ ORDER BY lg.active_until ASC;
 const SELECT_WAREHOUSE_BUNDLE_DETAIL_SQL = `
 SELECT
   lg.id AS bundle_id,
-  CASE
-    WHEN lg.active_until IS NOT NULL AND lg.active_until <= NOW() THEN 'READY_TO_SHIP'
-    ELSE 'OPEN'
-  END AS bundle_status,
+  ${EFFECTIVE_BUNDLE_STATUS_SQL} AS bundle_status,
   COALESCE(
     NULLIF(TRIM(CONCAT_WS(' ', lg.customer_address_json->>'first_name', lg.customer_address_json->>'last_name')), ''),
     NULLIF(lg.customer_address_json->>'name', ''),
@@ -504,6 +501,35 @@ LEFT JOIN linked_orders lo
 WHERE lg.id = $1::integer
 GROUP BY lg.id
 LIMIT 1;
+`;
+
+const SELECT_BUNDLE_EFFECTIVE_STATUS_SQL = `
+SELECT
+  lg.id AS bundle_id,
+  ${EFFECTIVE_BUNDLE_STATUS_SQL} AS bundle_status
+FROM link_groups lg
+WHERE lg.id = $1::integer
+LIMIT 1;
+`;
+
+const UPDATE_BUNDLE_LOCK_SQL = `
+UPDATE link_groups lg
+SET shipment_status = 'LOCKED',
+    locked_at = NOW()
+WHERE lg.id = $1::integer
+  AND ${EFFECTIVE_BUNDLE_STATUS_SQL} = 'READY_TO_SHIP'
+RETURNING lg.id AS bundle_id;
+`;
+
+const UPDATE_BUNDLE_SHIPPED_SQL = `
+UPDATE link_groups lg
+SET shipment_status = 'SHIPPED',
+    shipped_at = NOW(),
+    tracking_number = $2::text,
+    carrier = $3::text
+WHERE lg.id = $1::integer
+  AND lg.shipment_status = 'LOCKED'
+RETURNING lg.id AS bundle_id;
 `;
 
 const SELECT_WAREHOUSE_ORDERS_FOR_BUNDLES_SQL = `
@@ -626,6 +652,26 @@ ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS warehouse_region TEXT;
 
 const ALTER_LINK_GROUPS_ADD_WAREHOUSE_ADDRESS_JSON_SQL = `
 ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS warehouse_address_json JSONB;
+`;
+
+const ALTER_LINK_GROUPS_ADD_SHIPMENT_STATUS_SQL = `
+ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS shipment_status TEXT;
+`;
+
+const ALTER_LINK_GROUPS_ADD_LOCKED_AT_SQL = `
+ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS locked_at TIMESTAMP;
+`;
+
+const ALTER_LINK_GROUPS_ADD_SHIPPED_AT_SQL = `
+ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS shipped_at TIMESTAMP;
+`;
+
+const ALTER_LINK_GROUPS_ADD_TRACKING_NUMBER_SQL = `
+ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS tracking_number TEXT;
+`;
+
+const ALTER_LINK_GROUPS_ADD_CARRIER_SQL = `
+ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS carrier TEXT;
 `;
 
 const ALTER_LINKED_ORDERS_ADD_GROUP_ID_SQL = `
@@ -1508,6 +1554,11 @@ export async function ensureLinkingTablesExist() {
     await dbPool.query(ALTER_LINK_GROUPS_ADD_CUSTOMER_ADDRESS_JSON_SQL);
     await dbPool.query(ALTER_LINK_GROUPS_ADD_WAREHOUSE_REGION_SQL);
     await dbPool.query(ALTER_LINK_GROUPS_ADD_WAREHOUSE_ADDRESS_JSON_SQL);
+    await dbPool.query(ALTER_LINK_GROUPS_ADD_SHIPMENT_STATUS_SQL);
+    await dbPool.query(ALTER_LINK_GROUPS_ADD_LOCKED_AT_SQL);
+    await dbPool.query(ALTER_LINK_GROUPS_ADD_SHIPPED_AT_SQL);
+    await dbPool.query(ALTER_LINK_GROUPS_ADD_TRACKING_NUMBER_SQL);
+    await dbPool.query(ALTER_LINK_GROUPS_ADD_CARRIER_SQL);
     await dbPool.query(CREATE_LINK_GROUPS_INDEX_SQL);
     console.log("MIGRATION DONE link_groups");
     console.log("DB SCHEMA OK link_groups");
@@ -2384,6 +2435,114 @@ export function createApp() {
     } catch (error) {
       console.error("BUNDLE WAREHOUSE DETAIL FETCH ERROR", error);
       res.status(500).json({ ok: false });
+    }
+  });
+
+  app.post("/api/warehouse/bundles/:id/lock", async (req, res) => {
+    const bundleId = Number.parseInt(req.params.id, 10);
+    console.log("BUNDLE WAREHOUSE LOCK REQUEST", bundleId);
+
+    if (!Number.isInteger(bundleId) || bundleId <= 0) {
+      console.log("BUNDLE WAREHOUSE LOCK FAIL", bundleId, "invalid_bundle_id");
+      res.status(400).json({ ok: false, error: "Invalid bundle id" });
+      return;
+    }
+
+    if (!dbPool) {
+      console.log("BUNDLE WAREHOUSE LOCK FAIL", bundleId, "database_unavailable");
+      res.status(503).json({ ok: false, error: "Database unavailable" });
+      return;
+    }
+
+    try {
+      const statusResult = await dbPool.query(SELECT_BUNDLE_EFFECTIVE_STATUS_SQL, [bundleId]);
+      const bundle = statusResult.rows[0];
+      if (!bundle) {
+        console.log("BUNDLE WAREHOUSE LOCK FAIL", bundleId, "bundle_not_found");
+        res.status(404).json({ ok: false, error: "Bundle not found" });
+        return;
+      }
+      if (bundle.bundle_status !== "READY_TO_SHIP") {
+        console.log("BUNDLE WAREHOUSE LOCK FAIL", bundleId, "not_ready_to_ship");
+        res.status(400).json({ ok: false, error: "Bundle is not ready to ship" });
+        return;
+      }
+
+      const lockResult = await dbPool.query(UPDATE_BUNDLE_LOCK_SQL, [bundleId]);
+      if (!lockResult.rowCount) {
+        console.log("BUNDLE WAREHOUSE LOCK FAIL", bundleId, "lock_condition_failed");
+        res.status(400).json({ ok: false, error: "Bundle is not ready to ship" });
+        return;
+      }
+
+      console.log("BUNDLE WAREHOUSE LOCK SUCCESS", bundleId);
+      res.json({
+        ok: true,
+        bundle_id: bundleId,
+        bundle_status: "LOCKED"
+      });
+    } catch (error) {
+      console.log("BUNDLE WAREHOUSE LOCK FAIL", bundleId, "query_error");
+      console.error("BUNDLE WAREHOUSE LOCK ERROR", error);
+      res.status(500).json({ ok: false, error: "Internal server error" });
+    }
+  });
+
+  app.post("/api/warehouse/bundles/:id/shipped", async (req, res) => {
+    const bundleId = Number.parseInt(req.params.id, 10);
+    console.log("BUNDLE WAREHOUSE SHIPPED REQUEST", bundleId);
+
+    if (!Number.isInteger(bundleId) || bundleId <= 0) {
+      console.log("BUNDLE WAREHOUSE SHIPPED FAIL", bundleId, "invalid_bundle_id");
+      res.status(400).json({ ok: false, error: "Invalid bundle id" });
+      return;
+    }
+
+    if (!dbPool) {
+      console.log("BUNDLE WAREHOUSE SHIPPED FAIL", bundleId, "database_unavailable");
+      res.status(503).json({ ok: false, error: "Database unavailable" });
+      return;
+    }
+
+    const trackingNumber =
+      typeof req.body?.tracking_number === "string" ? req.body.tracking_number.trim() : "";
+    const carrier = typeof req.body?.carrier === "string" ? req.body.carrier.trim() : "";
+
+    try {
+      const statusResult = await dbPool.query(SELECT_BUNDLE_EFFECTIVE_STATUS_SQL, [bundleId]);
+      const bundle = statusResult.rows[0];
+      if (!bundle) {
+        console.log("BUNDLE WAREHOUSE SHIPPED FAIL", bundleId, "bundle_not_found");
+        res.status(404).json({ ok: false, error: "Bundle not found" });
+        return;
+      }
+      if (bundle.bundle_status !== "LOCKED") {
+        console.log("BUNDLE WAREHOUSE SHIPPED FAIL", bundleId, "not_locked");
+        res.status(400).json({ ok: false, error: "Bundle must be locked before shipping" });
+        return;
+      }
+
+      const shippedResult = await dbPool.query(UPDATE_BUNDLE_SHIPPED_SQL, [
+        bundleId,
+        trackingNumber || null,
+        carrier || null
+      ]);
+      if (!shippedResult.rowCount) {
+        console.log("BUNDLE WAREHOUSE SHIPPED FAIL", bundleId, "ship_condition_failed");
+        res.status(400).json({ ok: false, error: "Bundle must be locked before shipping" });
+        return;
+      }
+
+      console.log("BUNDLE WAREHOUSE SHIPPED SUCCESS", bundleId);
+      res.json({
+        ok: true,
+        bundle_id: bundleId,
+        bundle_status: "SHIPPED"
+      });
+    } catch (error) {
+      console.log("BUNDLE WAREHOUSE SHIPPED FAIL", bundleId, "query_error");
+      console.error("BUNDLE WAREHOUSE SHIPPED ERROR", error);
+      res.status(500).json({ ok: false, error: "Internal server error" });
     }
   });
 
