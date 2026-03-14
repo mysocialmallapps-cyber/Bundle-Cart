@@ -17,7 +17,7 @@ const BUNDLECART_PAID_RATE = {
   service_code: "BUNDLECART_PAID",
   total_price: "1000",
   description:
-    "Free first shipment, then $10 per extra order in 72h. Bundle & save time."
+    "Free first shipment, then $10 per extra order in 72h. Best for multiple orders."
 };
 const BUNDLECART_FREE_RATE = {
   service_name: "BundleCart",
@@ -26,6 +26,15 @@ const BUNDLECART_FREE_RATE = {
   description:
     "Start your bundle with free shipping. Add more orders in the next 72 hours for only $10 each and ship everything together."
 };
+const BUNDLECART_EMAIL_PROVIDER = String(process.env.BUNDLECART_EMAIL_PROVIDER || "")
+  .trim()
+  .toLowerCase();
+const BUNDLECART_EMAIL_FROM = String(process.env.BUNDLECART_EMAIL_FROM || "").trim();
+const BUNDLECART_EMAIL_API_KEY = String(process.env.BUNDLECART_EMAIL_API_KEY || "").trim();
+const BUNDLECART_EMAIL_WEBHOOK_URL = String(process.env.BUNDLECART_EMAIL_WEBHOOK_URL || "").trim();
+const BUNDLECART_EMAIL_WEBHOOK_AUTH_TOKEN = String(
+  process.env.BUNDLECART_EMAIL_WEBHOOK_AUTH_TOKEN || ""
+).trim();
 const BUNDLECART_REGION_WAREHOUSES = {
   US: {
     name: "BundleCart US Warehouse",
@@ -541,6 +550,22 @@ WHERE lg.id = $1::integer
 LIMIT 1;
 `;
 
+const SELECT_BUNDLE_NOTIFICATION_SUMMARY_SQL = `
+SELECT
+  lg.id AS bundle_id,
+  lg.email AS customer_email,
+  lg.active_until,
+  lg.tracking_number,
+  lg.carrier,
+  COUNT(lo.id)::integer AS order_count
+FROM link_groups lg
+LEFT JOIN linked_orders lo
+  ON lo.group_id = lg.id
+WHERE lg.id = $1::integer
+GROUP BY lg.id
+LIMIT 1;
+`;
+
 const UPDATE_BUNDLE_LOCK_SQL = `
 UPDATE link_groups lg
 SET shipment_status = 'LOCKED',
@@ -987,6 +1012,149 @@ function buildBundleCartRateResponse({ eligibleFree, currency }) {
       }
     ]
   };
+}
+
+function formatBundleExpiryForEmail(activeUntil) {
+  if (!activeUntil) {
+    return "N/A";
+  }
+  const parsed = new Date(activeUntil);
+  if (Number.isNaN(parsed.getTime())) {
+    return "N/A";
+  }
+  return parsed.toUTCString();
+}
+
+async function sendBundleCartEmail({ to, subject, text }) {
+  const recipient = String(to || "").trim();
+  if (!recipient) {
+    throw new Error("missing_recipient");
+  }
+
+  if (BUNDLECART_EMAIL_PROVIDER === "resend") {
+    if (!BUNDLECART_EMAIL_API_KEY || !BUNDLECART_EMAIL_FROM) {
+      throw new Error("missing_resend_email_config");
+    }
+    const response = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${BUNDLECART_EMAIL_API_KEY}`
+      },
+      body: JSON.stringify({
+        from: BUNDLECART_EMAIL_FROM,
+        to: [recipient],
+        subject,
+        text
+      })
+    });
+    if (!response.ok) {
+      const responseText = await response.text();
+      throw new Error(`resend_status_${response.status}:${responseText}`);
+    }
+    return;
+  }
+
+  if (BUNDLECART_EMAIL_PROVIDER === "webhook") {
+    if (!BUNDLECART_EMAIL_WEBHOOK_URL) {
+      throw new Error("missing_email_webhook_url");
+    }
+    const webhookHeaders = {
+      "Content-Type": "application/json"
+    };
+    if (BUNDLECART_EMAIL_WEBHOOK_AUTH_TOKEN) {
+      webhookHeaders.Authorization = `Bearer ${BUNDLECART_EMAIL_WEBHOOK_AUTH_TOKEN}`;
+    }
+    const response = await fetch(BUNDLECART_EMAIL_WEBHOOK_URL, {
+      method: "POST",
+      headers: webhookHeaders,
+      body: JSON.stringify({
+        to: recipient,
+        subject,
+        text
+      })
+    });
+    if (!response.ok) {
+      const responseText = await response.text();
+      throw new Error(`email_webhook_status_${response.status}:${responseText}`);
+    }
+    return;
+  }
+
+  throw new Error("email_provider_not_configured");
+}
+
+async function getBundleNotificationSummary(bundleId) {
+  if (!dbPool) {
+    return null;
+  }
+  const result = await dbPool.query(SELECT_BUNDLE_NOTIFICATION_SUMMARY_SQL, [bundleId]);
+  return result.rows[0] || null;
+}
+
+async function sendBundleStartedEmailNotification(bundleId, fallbackEmail) {
+  try {
+    const summary = await getBundleNotificationSummary(bundleId);
+    const recipient = String(summary?.customer_email || fallbackEmail || "").trim().toLowerCase();
+    const orderCount = Number(summary?.order_count || 0);
+    const expiry = formatBundleExpiryForEmail(summary?.active_until);
+    const subject = "Your BundleCart bundle has started";
+    const text = [
+      "Your BundleCart bundle has started with free shipping.",
+      "You have 72 hours to add more orders for $10 each, then ship everything together.",
+      "",
+      `Bundle ID: ${bundleId}`,
+      `Bundle expires: ${expiry}`,
+      `Current order count: ${orderCount}`
+    ].join("\n");
+    await sendBundleCartEmail({ to: recipient, subject, text });
+    console.log("BUNDLECART EMAIL BUNDLE STARTED", bundleId, recipient);
+  } catch (error) {
+    console.error("BUNDLECART EMAIL BUNDLE STARTED ERROR", bundleId, error);
+  }
+}
+
+async function sendBundleOrderAddedEmailNotification(bundleId, fallbackEmail) {
+  try {
+    const summary = await getBundleNotificationSummary(bundleId);
+    const recipient = String(summary?.customer_email || fallbackEmail || "").trim().toLowerCase();
+    const orderCount = Number(summary?.order_count || 0);
+    const expiry = formatBundleExpiryForEmail(summary?.active_until);
+    const subject = "A new order was added to your BundleCart";
+    const text = [
+      "A new order was added to your active BundleCart.",
+      "",
+      `Bundle ID: ${bundleId}`,
+      `Updated order count: ${orderCount}`,
+      `Bundle expires: ${expiry}`
+    ].join("\n");
+    await sendBundleCartEmail({ to: recipient, subject, text });
+    console.log("BUNDLECART EMAIL ORDER ADDED", bundleId, recipient);
+  } catch (error) {
+    console.error("BUNDLECART EMAIL ORDER ADDED ERROR", bundleId, error);
+  }
+}
+
+async function sendBundleShippedEmailNotification(bundleId, fallbackCarrier, fallbackTrackingNumber) {
+  try {
+    const summary = await getBundleNotificationSummary(bundleId);
+    const recipient = String(summary?.customer_email || "").trim().toLowerCase();
+    const carrier = String(summary?.carrier || fallbackCarrier || "").trim() || "N/A";
+    const trackingNumber =
+      String(summary?.tracking_number || fallbackTrackingNumber || "").trim() || "N/A";
+    const subject = "Your BundleCart shipment is on the way";
+    const text = [
+      "Your consolidated BundleCart shipment is on the way.",
+      "",
+      `Bundle ID: ${bundleId}`,
+      `Carrier: ${carrier}`,
+      `Tracking number: ${trackingNumber}`
+    ].join("\n");
+    await sendBundleCartEmail({ to: recipient, subject, text });
+    console.log("BUNDLECART EMAIL BUNDLE SHIPPED", bundleId, recipient);
+  } catch (error) {
+    console.error("BUNDLECART EMAIL BUNDLE SHIPPED ERROR", bundleId, error);
+  }
 }
 
 function isBundleCartShippingLine(line) {
@@ -1660,6 +1828,8 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
   let hasAccessToken = false;
   let merchantAccessToken = "";
   let linkedOrderPersistenceDone = false;
+  let bundleStartedEmailGroupId = null;
+  let bundleOrderAddedEmailGroupId = null;
 
   if (!normalizedShopDomain) {
     console.log("MERCHANT SKIPPED missing shop_domain");
@@ -1774,6 +1944,11 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
         ]);
         if (linkedOrderInsertResult.rowCount > 0) {
           console.log("LINKED_ORDER INSERTED", orderId, groupId);
+          if (existingWindowFound) {
+            bundleOrderAddedEmailGroupId = groupId;
+          } else {
+            bundleStartedEmailGroupId = groupId;
+          }
         } else {
           console.log("LINKED_ORDER DUPLICATE", orderId);
         }
@@ -1823,6 +1998,13 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
         console.log("LINKED_ORDER DUPLICATE", orderId);
       }
     }
+  }
+
+  if (bundleStartedEmailGroupId != null) {
+    await sendBundleStartedEmailNotification(bundleStartedEmailGroupId, email);
+  }
+  if (bundleOrderAddedEmailGroupId != null) {
+    await sendBundleOrderAddedEmailNotification(bundleOrderAddedEmailGroupId, email);
   }
 
   const hasWarehouseAddressFromRuntime =
@@ -2463,6 +2645,7 @@ export function createApp() {
       }
 
       console.log("BUNDLE WAREHOUSE SHIPPED SUCCESS", bundleId);
+      await sendBundleShippedEmailNotification(bundleId, carrier || null, trackingNumber || null);
       res.json({
         ok: true,
         bundle_id: bundleId,
