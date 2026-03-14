@@ -15,16 +15,16 @@ const BUNDLECART_CALLBACK_URL = "https://bundle-cart.replit.app/api/shipping/rat
 const BUNDLECART_PAID_RATE = {
   service_name: "BundleCart",
   service_code: "BUNDLECART_PAID",
-  total_price: "1000",
+  total_price: "500",
   description:
-    "Free first shipment, then $10 per extra order in 72h. Best for multiple orders."
+    "Start your bundle for a fixed $5 network fee. Additional orders in the next 72 hours ship free together."
 };
 const BUNDLECART_FREE_RATE = {
   service_name: "BundleCart",
   service_code: "BUNDLECART_FREE",
   total_price: "0",
   description:
-    "Start your bundle with free shipping. Add more orders in the next 72 hours for only $10 each and ship everything together."
+    "Your active BundleCart window is open. Linked orders in the next 72 hours ship free together."
 };
 const BUNDLECART_EMAIL_PROVIDER = String(process.env.BUNDLECART_EMAIL_PROVIDER || "")
   .trim()
@@ -1100,8 +1100,8 @@ async function sendBundleStartedEmailNotification(bundleId, fallbackEmail) {
     const expiry = formatBundleExpiryForEmail(summary?.active_until);
     const subject = "Your BundleCart bundle has started";
     const text = [
-      "Your BundleCart bundle has started with free shipping.",
-      "You have 72 hours to add more orders for $10 each, then ship everything together.",
+      "Your BundleCart bundle has started with a fixed $5 network fee.",
+      "You now have 72 hours to add more orders to the same destination and ship everything together for free.",
       "",
       `Bundle ID: ${bundleId}`,
       `Bundle expires: ${expiry}`,
@@ -1890,7 +1890,7 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
         groupId = activeGroupResult.rows[0].id;
         console.log("BUNDLECART EXISTING BUNDLE WINDOW FOUND", groupId);
         console.log("BUNDLECART ORDER LINKED TO EXISTING GROUP", orderId, groupId);
-        console.log("BUNDLECART ADDITIONAL ORDER CHARGED 10 USD");
+        console.log("BUNDLECART NETWORK LINKED ORDER FREE");
         await dbPool.query(UPDATE_LINK_GROUP_LAST_SEEN_SQL, [groupId]);
         await dbPool.query(UPDATE_LINK_GROUP_METADATA_SQL, [
           groupId,
@@ -1914,7 +1914,7 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
         const createGroupResult = await dbPool.query(INSERT_LINK_GROUP_SQL, [email || ""]);
         groupId = createGroupResult.rows[0].id;
         console.log("BUNDLECART NEW BUNDLE WINDOW CREATED", groupId);
-        console.log("BUNDLECART FIRST ORDER FREE");
+        console.log("BUNDLECART NETWORK FIRST ORDER FEE 5");
         await dbPool.query(START_BUNDLECART_WINDOW_SQL, [
           groupId,
           paidAtTimestamp,
@@ -1938,7 +1938,7 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
           orderId,
           email || null,
           true,
-          existingWindowFound,
+          !existingWindowFound,
           addressHash,
           createdAt
         ]);
@@ -2239,7 +2239,7 @@ export function createApp() {
         console.log("BUNDLECART ADDRESS-ONLY ELIGIBILITY", { addressHash });
 
         if (!addressHash || !dbPool) {
-          console.log("BUNDLECART NOT ELIGIBLE PAID BY ADDRESS");
+          console.log("BUNDLECART NETWORK FIRST ORDER FEE 5");
           return res
             .status(200)
             .json(buildBundleCartRateResponse({ eligibleFree: false, currency }));
@@ -2251,10 +2251,10 @@ export function createApp() {
         if (activeGroupResult.rowCount > 0) {
           const activeGroupId = activeGroupResult.rows[0].id;
           console.log("BUNDLECART EXISTING BUNDLE WINDOW FOUND", activeGroupId);
-          console.log("BUNDLECART ADDITIONAL ORDER CHARGED 10 USD");
+          console.log("BUNDLECART NETWORK LINKED ORDER FREE");
           return res
             .status(200)
-            .json(buildBundleCartRateResponse({ eligibleFree: false, currency }));
+            .json(buildBundleCartRateResponse({ eligibleFree: true, currency }));
         }
 
         const latestGroupResult = await dbPool.query(SELECT_LATEST_BUNDLE_GROUP_BY_ADDRESS_SQL, [
@@ -2267,10 +2267,10 @@ export function createApp() {
           }
         }
 
-        console.log("BUNDLECART FIRST ORDER FREE");
+        console.log("BUNDLECART NETWORK FIRST ORDER FEE 5");
         return res
           .status(200)
-          .json(buildBundleCartRateResponse({ eligibleFree: true, currency }));
+          .json(buildBundleCartRateResponse({ eligibleFree: false, currency }));
       } catch (error) {
         console.error("BUNDLECART RATE REQUEST ERROR", error);
         return fallbackPaid();
