@@ -15,14 +15,16 @@ const BUNDLECART_CALLBACK_URL = "https://bundle-cart.replit.app/api/shipping/rat
 const BUNDLECART_PAID_RATE = {
   service_name: "BundleCart",
   service_code: "BUNDLECART_PAID",
-  total_price: "995",
-  description: "BundleCart shipping"
+  total_price: "1000",
+  description:
+    "Free first shipment, then $10 per extra order in 72h. Bundle & save time."
 };
 const BUNDLECART_FREE_RATE = {
   service_name: "BundleCart",
   service_code: "BUNDLECART_FREE",
   total_price: "0",
-  description: "BundleCart free shipping"
+  description:
+    "Start your bundle with free shipping. Add more orders in the next 72 hours for only $10 each and ship everything together."
 };
 const BUNDLECART_REGION_WAREHOUSES = {
   US: {
@@ -301,6 +303,23 @@ ORDER BY lg.active_until DESC
 LIMIT 1;
 `;
 
+const SELECT_ACTIVE_BUNDLE_GROUP_BY_ADDRESS_SQL = `
+SELECT lg.id, lg.email, lg.active_until
+FROM link_groups lg
+WHERE lg.address_hash = $1::text
+  AND lg.active_until > NOW()
+ORDER BY lg.active_until DESC
+LIMIT 1;
+`;
+
+const SELECT_LATEST_BUNDLE_GROUP_BY_ADDRESS_SQL = `
+SELECT lg.id, lg.email, lg.active_until
+FROM link_groups lg
+WHERE lg.address_hash = $1::text
+ORDER BY COALESCE(lg.active_until, lg.created_at) DESC
+LIMIT 1;
+`;
+
 const SELECT_ADDRESS_MISMATCH_ACTIVE_GROUP_SQL = `
 SELECT lg.id
 FROM link_groups lg
@@ -327,6 +346,16 @@ LIMIT 20;
 `;
 
 const UPDATE_BUNDLECART_PAID_GROUP_SQL = `
+UPDATE link_groups
+SET last_seen_at = NOW(),
+    bundlecart_paid_at = $2::timestamp,
+    active_until = ($2::timestamp + INTERVAL '72 hours'),
+    address_hash = $3::text,
+    first_paid_order_id = $4::bigint
+WHERE id = $1::integer;
+`;
+
+const START_BUNDLECART_WINDOW_SQL = `
 UPDATE link_groups
 SET last_seen_at = NOW(),
     bundlecart_paid_at = $2::timestamp,
@@ -1676,36 +1705,47 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
       Boolean(warehouseAddress) && typeof warehouseAddress === "object";
     console.log("BUNDLECART WAREHOUSE ASSIGNED", normalizedShopDomain, warehouseRegion);
     console.log("BUNDLECART WAREHOUSE ADDRESS", safeJsonString(warehouseAddress));
-    if (bundleCartSelection.paid) {
-      if (!email) {
-        console.log("LINK SKIPPED no email", orderId);
-      } else if (!addressHash) {
-        console.log("BUNDLECART ADDRESS MISMATCH");
+    if (!addressHash) {
+      console.log("BUNDLECART ADDRESS MISMATCH");
+    } else {
+      let groupId = null;
+      let existingWindowFound = false;
+
+      console.log("DB STEP link_groups select active_by_address");
+      const activeGroupResult = await dbPool.query(SELECT_ACTIVE_BUNDLE_GROUP_BY_ADDRESS_SQL, [
+        addressHash
+      ]);
+      if (activeGroupResult.rowCount > 0) {
+        existingWindowFound = true;
+        groupId = activeGroupResult.rows[0].id;
+        console.log("BUNDLECART EXISTING BUNDLE WINDOW FOUND", groupId);
+        console.log("BUNDLECART ORDER LINKED TO EXISTING GROUP", orderId, groupId);
+        console.log("BUNDLECART ADDITIONAL ORDER CHARGED 10 USD");
+        await dbPool.query(UPDATE_LINK_GROUP_LAST_SEEN_SQL, [groupId]);
+        await dbPool.query(UPDATE_LINK_GROUP_METADATA_SQL, [
+          groupId,
+          JSON.stringify(shippingAddress || {}),
+          warehouseRegion,
+          JSON.stringify(warehouseAddress || {})
+        ]);
+        console.log("BUNDLECART CUSTOMER ADDRESS STORED");
       } else {
-        let groupId = null;
-        console.log("DB STEP link_groups select");
-        const matchingGroupResult = await dbPool.query(SELECT_MATCHING_GROUP_FOR_PAID_SQL, [
-          email,
+        const latestGroupResult = await dbPool.query(SELECT_LATEST_BUNDLE_GROUP_BY_ADDRESS_SQL, [
           addressHash
         ]);
-        if (matchingGroupResult.rowCount > 0) {
-          groupId = matchingGroupResult.rows[0].id;
-          console.log("LINK GROUP REUSED", groupId);
-        } else {
-          console.log("DB STEP link_groups insert");
-          const createGroupResult = await dbPool.query(INSERT_LINK_GROUP_SQL, [email]);
-          groupId = createGroupResult.rows[0].id;
-          console.log("LINK GROUP CREATED", groupId);
+        if (latestGroupResult.rowCount > 0) {
+          const latestActiveUntil = latestGroupResult.rows[0].active_until;
+          if (latestActiveUntil && new Date(latestActiveUntil).getTime() <= Date.now()) {
+            console.log("BUNDLECART WINDOW EXPIRED, STARTING NEW BUNDLE");
+          }
         }
 
-        console.log("DB STEP link_groups update");
-        console.log("BUNDLECART PAID WINDOW PARAMS", {
-          groupId,
-          paidAt: paidAtTimestamp,
-          addressHash,
-          orderId
-        });
-        await dbPool.query(UPDATE_BUNDLECART_PAID_GROUP_SQL, [
+        console.log("DB STEP link_groups insert");
+        const createGroupResult = await dbPool.query(INSERT_LINK_GROUP_SQL, [email || ""]);
+        groupId = createGroupResult.rows[0].id;
+        console.log("BUNDLECART NEW BUNDLE WINDOW CREATED", groupId);
+        console.log("BUNDLECART FIRST ORDER FREE");
+        await dbPool.query(START_BUNDLECART_WINDOW_SQL, [
           groupId,
           paidAtTimestamp,
           addressHash,
@@ -1718,16 +1758,17 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
           JSON.stringify(warehouseAddress || {})
         ]);
         console.log("BUNDLECART CUSTOMER ADDRESS STORED");
-        console.log("BUNDLECART PAID WINDOW STARTED");
+      }
 
+      if (groupId != null) {
         console.log("DB STEP linked_orders insert");
         const linkedOrderInsertResult = await dbPool.query(INSERT_LINKED_ORDER_SQL, [
           groupId,
           normalizedShopDomain,
           orderId,
-          email,
+          email || null,
           true,
-          true,
+          existingWindowFound,
           addressHash,
           createdAt
         ]);
@@ -1742,109 +1783,6 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
           warehouseRegion,
           JSON.stringify(warehouseAddress || {})
         ]);
-      }
-    } else if (bundleCartSelection.free) {
-      if (!email) {
-        console.log("LINK SKIPPED no email", orderId);
-        console.log("BUNDLECART FREE ORDER REJECTED");
-      } else if (!addressHash) {
-        console.log("BUNDLECART ADDRESS MISMATCH");
-        console.log("BUNDLECART FREE ORDER REJECTED");
-      } else {
-        console.log("DB STEP link_groups select");
-        const eligibleGroupResult = await dbPool.query(SELECT_ELIGIBLE_BUNDLECART_GROUP_SQL, [
-          email,
-          addressHash
-        ]);
-        if (eligibleGroupResult.rowCount > 0) {
-          const groupId = eligibleGroupResult.rows[0].id;
-          console.log("DB STEP link_groups update");
-          await dbPool.query(UPDATE_LINK_GROUP_LAST_SEEN_SQL, [groupId]);
-          await dbPool.query(UPDATE_LINK_GROUP_METADATA_SQL, [
-            groupId,
-            JSON.stringify(shippingAddress || {}),
-            warehouseRegion,
-            JSON.stringify(warehouseAddress || {})
-          ]);
-          console.log("BUNDLECART CUSTOMER ADDRESS STORED");
-          console.log("BUNDLECART FREE ORDER ACCEPTED");
-          console.log("DB STEP linked_orders insert");
-          const linkedOrderInsertResult = await dbPool.query(INSERT_LINKED_ORDER_SQL, [
-            groupId,
-            normalizedShopDomain,
-            orderId,
-            email,
-            true,
-            false,
-            addressHash,
-            createdAt
-          ]);
-          if (linkedOrderInsertResult.rowCount > 0) {
-            console.log("LINKED_ORDER INSERTED", orderId, groupId);
-          } else {
-            console.log("LINKED_ORDER DUPLICATE", orderId);
-          }
-          await dbPool.query(UPDATE_LINKED_ORDER_METADATA_SQL, [
-            normalizedShopDomain,
-            orderId,
-            warehouseRegion,
-            JSON.stringify(warehouseAddress || {})
-          ]);
-        } else {
-          const addressOnlyEligibleResult = await dbPool.query(
-            SELECT_ELIGIBLE_BUNDLECART_GROUP_BY_ADDRESS_SQL,
-            [addressHash]
-          );
-
-          if (addressOnlyEligibleResult.rowCount > 0) {
-            const groupId = addressOnlyEligibleResult.rows[0].id;
-            const groupEmail = String(addressOnlyEligibleResult.rows[0].email || "");
-            if (groupEmail && groupEmail !== email) {
-              console.log("BUNDLECART EMAIL DIFFERENCE ON FREE ORDER");
-            }
-            console.log("DB STEP link_groups update");
-            await dbPool.query(UPDATE_LINK_GROUP_LAST_SEEN_SQL, [groupId]);
-            await dbPool.query(UPDATE_LINK_GROUP_METADATA_SQL, [
-              groupId,
-              JSON.stringify(shippingAddress || {}),
-              warehouseRegion,
-              JSON.stringify(warehouseAddress || {})
-            ]);
-            console.log("BUNDLECART CUSTOMER ADDRESS STORED");
-            console.log("BUNDLECART FREE ORDER ACCEPTED");
-            console.log("DB STEP linked_orders insert");
-            const linkedOrderInsertResult = await dbPool.query(INSERT_LINKED_ORDER_SQL, [
-              groupId,
-              normalizedShopDomain,
-              orderId,
-              email,
-              true,
-              false,
-              addressHash,
-              createdAt
-            ]);
-            if (linkedOrderInsertResult.rowCount > 0) {
-              console.log("LINKED_ORDER INSERTED", orderId, groupId);
-            } else {
-              console.log("LINKED_ORDER DUPLICATE", orderId);
-            }
-            await dbPool.query(UPDATE_LINKED_ORDER_METADATA_SQL, [
-              normalizedShopDomain,
-              orderId,
-              warehouseRegion,
-              JSON.stringify(warehouseAddress || {})
-            ]);
-          } else {
-            const mismatchResult = await dbPool.query(SELECT_ADDRESS_MISMATCH_ACTIVE_GROUP_SQL, [
-              email,
-              addressHash
-            ]);
-            if (mismatchResult.rowCount > 0) {
-              console.log("BUNDLECART ADDRESS MISMATCH");
-            }
-            console.log("BUNDLECART FREE ORDER REJECTED");
-          }
-        }
       }
     }
     linkedOrderPersistenceDone = true;
@@ -2109,15 +2047,13 @@ export function createApp() {
         const rate = parsedPayload?.rate && typeof parsedPayload.rate === "object" ? parsedPayload.rate : {};
         const destination = rate.destination && typeof rate.destination === "object" ? rate.destination : {};
         console.log("BUNDLECART RATE RAW", JSON.stringify(rate || {}));
-        const email = normalizeAddressValue(rate.email || destination.email || parsedPayload?.email);
         const { canonical, hasRequired } = buildCanonicalAddress(destination);
         const addressHash = hasRequired ? hashAddressCanonical(canonical) : "";
         console.log("BUNDLECART RATE CANONICAL ADDRESS", canonical);
         const currency = destination.currency || rate.currency || "USD";
-        console.log("BUNDLECART RATE EMAIL", email || "");
         console.log("BUNDLECART RATE ADDRESS INPUT", JSON.stringify(destination || {}));
         console.log("BUNDLECART RATE ADDRESS HASH", addressHash || "");
-        console.log("BUNDLECART RATE ELIGIBILITY QUERY PARAMS", { email, addressHash });
+        console.log("BUNDLECART RATE ELIGIBILITY QUERY PARAMS", { addressHash });
         console.log("BUNDLECART ADDRESS-ONLY ELIGIBILITY", { addressHash });
 
         if (!addressHash || !dbPool) {
@@ -2127,39 +2063,32 @@ export function createApp() {
             .json(buildBundleCartRateResponse({ eligibleFree: false, currency }));
         }
 
-        const eligibleResult = await dbPool.query(
-          SELECT_ELIGIBLE_BUNDLECART_GROUP_BY_ADDRESS_SQL,
-          [addressHash]
-        );
-        if (eligibleResult.rowCount > 0) {
-          console.log("BUNDLECART ELIGIBLE FREE BY ADDRESS");
-          return res
-            .status(200)
-            .json(buildBundleCartRateResponse({ eligibleFree: true, currency }));
-        }
-
-        const activeByEmailDebug = await dbPool.query(SELECT_ACTIVE_GROUPS_FOR_EMAIL_DEBUG_SQL, [
-          email
-        ]);
-        console.log("BUNDLECART ACTIVE GROUPS FOR EMAIL", activeByEmailDebug.rows);
-        if (
-          activeByEmailDebug.rowCount > 0 &&
-          activeByEmailDebug.rows.some((row) => String(row.address_hash || "") !== addressHash)
-        ) {
-          console.log("BUNDLECART HASH MISMATCH STORED VS RATE");
-        }
-
-        const mismatchResult = await dbPool.query(SELECT_ADDRESS_MISMATCH_ACTIVE_GROUP_SQL, [
-          email,
+        const activeGroupResult = await dbPool.query(SELECT_ACTIVE_BUNDLE_GROUP_BY_ADDRESS_SQL, [
           addressHash
         ]);
-        if (mismatchResult.rowCount > 0) {
-          console.log("BUNDLECART ADDRESS MISMATCH");
+        if (activeGroupResult.rowCount > 0) {
+          const activeGroupId = activeGroupResult.rows[0].id;
+          console.log("BUNDLECART EXISTING BUNDLE WINDOW FOUND", activeGroupId);
+          console.log("BUNDLECART ADDITIONAL ORDER CHARGED 10 USD");
+          return res
+            .status(200)
+            .json(buildBundleCartRateResponse({ eligibleFree: false, currency }));
         }
-        console.log("BUNDLECART NOT ELIGIBLE PAID BY ADDRESS");
+
+        const latestGroupResult = await dbPool.query(SELECT_LATEST_BUNDLE_GROUP_BY_ADDRESS_SQL, [
+          addressHash
+        ]);
+        if (latestGroupResult.rowCount > 0) {
+          const latestActiveUntil = latestGroupResult.rows[0].active_until;
+          if (latestActiveUntil && new Date(latestActiveUntil).getTime() <= Date.now()) {
+            console.log("BUNDLECART WINDOW EXPIRED, STARTING NEW BUNDLE");
+          }
+        }
+
+        console.log("BUNDLECART FIRST ORDER FREE");
         return res
           .status(200)
-          .json(buildBundleCartRateResponse({ eligibleFree: false, currency }));
+          .json(buildBundleCartRateResponse({ eligibleFree: true, currency }));
       } catch (error) {
         console.error("BUNDLECART RATE REQUEST ERROR", error);
         return fallbackPaid();
