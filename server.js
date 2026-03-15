@@ -43,6 +43,15 @@ const SHOPIFY_BILLING_TEST_MODE = ["1", "true", "yes", "on"].includes(
     .trim()
     .toLowerCase()
 );
+const SHOPIFY_BILLING_PLAN_NAME = String(
+  process.env.SHOPIFY_BILLING_PLAN_NAME || "BundleCart Network Billing"
+).trim();
+const SHOPIFY_BILLING_USAGE_CAP_AMOUNT = Number.parseFloat(
+  String(process.env.SHOPIFY_BILLING_USAGE_CAP_AMOUNT || "1000")
+);
+const SHOPIFY_BILLING_BASE_PLAN_AMOUNT = Number.parseFloat(
+  String(process.env.SHOPIFY_BILLING_BASE_PLAN_AMOUNT || "0")
+);
 
 const CREATE_SHOPIFY_ORDERS_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS shopify_orders (
@@ -146,6 +155,27 @@ const CREATE_BUNDLECART_BILLING_IDEMPOTENCY_UNIQUE_INDEX_SQL = `
 CREATE UNIQUE INDEX IF NOT EXISTS bundlecart_billing_idempotency_key_uq
 ON bundlecart_billing (idempotency_key)
 WHERE idempotency_key IS NOT NULL;
+`;
+
+const CREATE_MERCHANT_BILLING_SUBSCRIPTIONS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS merchant_billing_subscriptions (
+  id SERIAL PRIMARY KEY,
+  shop_domain TEXT UNIQUE NOT NULL,
+  app_subscription_id TEXT,
+  line_item_id TEXT,
+  billing_mode TEXT,
+  capped_amount NUMERIC(10,2),
+  subscription_status TEXT,
+  confirmation_url TEXT,
+  last_error TEXT,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+`;
+
+const CREATE_MERCHANT_BILLING_SUBSCRIPTIONS_SHOP_UNIQUE_INDEX_SQL = `
+CREATE UNIQUE INDEX IF NOT EXISTS merchant_billing_subscriptions_shop_domain_uq
+ON merchant_billing_subscriptions (shop_domain);
 `;
 
 const CREATE_LINKED_ORDERS_UNIQUE_INDEX_SQL = `
@@ -588,6 +618,42 @@ const ALTER_BUNDLECART_BILLING_ADD_FAILURE_REASON_SQL = `
 ALTER TABLE bundlecart_billing ADD COLUMN IF NOT EXISTS failure_reason TEXT;
 `;
 
+const ALTER_MERCHANT_BILLING_SUBSCRIPTIONS_ADD_APP_SUBSCRIPTION_ID_SQL = `
+ALTER TABLE merchant_billing_subscriptions ADD COLUMN IF NOT EXISTS app_subscription_id TEXT;
+`;
+
+const ALTER_MERCHANT_BILLING_SUBSCRIPTIONS_ADD_LINE_ITEM_ID_SQL = `
+ALTER TABLE merchant_billing_subscriptions ADD COLUMN IF NOT EXISTS line_item_id TEXT;
+`;
+
+const ALTER_MERCHANT_BILLING_SUBSCRIPTIONS_ADD_BILLING_MODE_SQL = `
+ALTER TABLE merchant_billing_subscriptions ADD COLUMN IF NOT EXISTS billing_mode TEXT;
+`;
+
+const ALTER_MERCHANT_BILLING_SUBSCRIPTIONS_ADD_CAPPED_AMOUNT_SQL = `
+ALTER TABLE merchant_billing_subscriptions ADD COLUMN IF NOT EXISTS capped_amount NUMERIC(10,2);
+`;
+
+const ALTER_MERCHANT_BILLING_SUBSCRIPTIONS_ADD_SUBSCRIPTION_STATUS_SQL = `
+ALTER TABLE merchant_billing_subscriptions ADD COLUMN IF NOT EXISTS subscription_status TEXT;
+`;
+
+const ALTER_MERCHANT_BILLING_SUBSCRIPTIONS_ADD_CONFIRMATION_URL_SQL = `
+ALTER TABLE merchant_billing_subscriptions ADD COLUMN IF NOT EXISTS confirmation_url TEXT;
+`;
+
+const ALTER_MERCHANT_BILLING_SUBSCRIPTIONS_ADD_LAST_ERROR_SQL = `
+ALTER TABLE merchant_billing_subscriptions ADD COLUMN IF NOT EXISTS last_error TEXT;
+`;
+
+const ALTER_MERCHANT_BILLING_SUBSCRIPTIONS_ADD_CREATED_AT_SQL = `
+ALTER TABLE merchant_billing_subscriptions ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
+`;
+
+const ALTER_MERCHANT_BILLING_SUBSCRIPTIONS_ADD_UPDATED_AT_SQL = `
+ALTER TABLE merchant_billing_subscriptions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
+`;
+
 const UPSERT_MERCHANT_TOKEN_SQL = `
 INSERT INTO merchants (name, domain, is_active, access_token, created_at, updated_at)
 VALUES ($1, $1, TRUE, $2, NOW(), NOW())
@@ -611,6 +677,61 @@ SELECT id, status, idempotency_key
 FROM bundlecart_billing
 WHERE bundle_id = $1::integer
 LIMIT 1;
+`;
+
+const SELECT_MERCHANT_BILLING_SUBSCRIPTION_SQL = `
+SELECT
+  id,
+  shop_domain,
+  app_subscription_id,
+  line_item_id,
+  billing_mode,
+  capped_amount,
+  subscription_status,
+  confirmation_url,
+  last_error,
+  created_at,
+  updated_at
+FROM merchant_billing_subscriptions
+WHERE shop_domain = $1::text
+LIMIT 1;
+`;
+
+const UPSERT_MERCHANT_BILLING_SUBSCRIPTION_SQL = `
+INSERT INTO merchant_billing_subscriptions (
+  shop_domain,
+  app_subscription_id,
+  line_item_id,
+  billing_mode,
+  capped_amount,
+  subscription_status,
+  confirmation_url,
+  last_error,
+  created_at,
+  updated_at
+)
+VALUES (
+  $1::text,
+  $2::text,
+  $3::text,
+  $4::text,
+  $5::numeric,
+  $6::text,
+  $7::text,
+  $8::text,
+  NOW(),
+  NOW()
+)
+ON CONFLICT (shop_domain)
+DO UPDATE SET
+  app_subscription_id = EXCLUDED.app_subscription_id,
+  line_item_id = EXCLUDED.line_item_id,
+  billing_mode = EXCLUDED.billing_mode,
+  capped_amount = EXCLUDED.capped_amount,
+  subscription_status = EXCLUDED.subscription_status,
+  confirmation_url = EXCLUDED.confirmation_url,
+  last_error = EXCLUDED.last_error,
+  updated_at = NOW();
 `;
 
 const INSERT_BUNDLECART_BILLING_PENDING_SQL = `
@@ -809,6 +930,19 @@ function detectBundlecartBillingMode() {
   };
 }
 
+function detectBundlecartSubscriptionMode() {
+  const billingMode = detectBundlecartBillingMode();
+  console.log("BUNDLECART SUBSCRIPTION MODE DETECTED", billingMode.mode);
+  return billingMode;
+}
+
+function getBillingNumericValue(value, fallback) {
+  if (Number.isFinite(value) && value >= 0) {
+    return value;
+  }
+  return fallback;
+}
+
 function buildBundlecartBillingIdempotencyKey({ shopDomain, bundleId, orderId, amount }) {
   const normalizedShop = normalizeShopDomain(shopDomain);
   const keySource = [
@@ -826,6 +960,87 @@ function toBillingFailureReason(errorOrReason) {
       ? errorOrReason
       : String(errorOrReason?.message || "billing_error");
   return raw.slice(0, 300);
+}
+
+async function callShopifyAdminGraphql({ shopDomain, accessToken, query, variables }) {
+  const normalizedShop = normalizeShopDomain(shopDomain);
+  const token = String(accessToken || "").trim();
+  if (!normalizedShop || !token) {
+    throw new Error("missing_shop_or_token_for_graphql");
+  }
+
+  const endpoint = `https://${normalizedShop}/admin/api/${SHOPIFY_ADMIN_API_VERSION}/graphql.json`;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "X-Shopify-Access-Token": token
+    },
+    body: JSON.stringify({ query, variables: variables || {} })
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`shopify_graphql_status_${response.status}:${body}`);
+  }
+
+  const payload = await response.json();
+  if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
+    throw new Error(`shopify_graphql_errors:${JSON.stringify(payload.errors)}`);
+  }
+  return payload?.data || {};
+}
+
+async function getStoredMerchantBillingSubscription(shopDomain) {
+  if (!dbPool) {
+    return null;
+  }
+  const normalizedShop = normalizeShopDomain(shopDomain);
+  if (!normalizedShop) {
+    return null;
+  }
+  const result = await dbPool.query(SELECT_MERCHANT_BILLING_SUBSCRIPTION_SQL, [normalizedShop]);
+  return result.rows[0] || null;
+}
+
+async function upsertMerchantBillingSubscriptionState({
+  shopDomain,
+  appSubscriptionId,
+  lineItemId,
+  billingMode,
+  cappedAmount,
+  subscriptionStatus,
+  confirmationUrl,
+  lastError
+}) {
+  if (!dbPool) {
+    return;
+  }
+  const normalizedShop = normalizeShopDomain(shopDomain);
+  if (!normalizedShop) {
+    return;
+  }
+  await dbPool.query(UPSERT_MERCHANT_BILLING_SUBSCRIPTION_SQL, [
+    normalizedShop,
+    appSubscriptionId || null,
+    lineItemId || null,
+    billingMode || null,
+    cappedAmount != null ? cappedAmount : null,
+    subscriptionStatus || null,
+    confirmationUrl || null,
+    lastError || null
+  ]);
+}
+
+function buildBundlecartSubscriptionReturnUrl(shopDomain) {
+  const normalizedShop = normalizeShopDomain(shopDomain);
+  const appUrl = String(process.env.APP_URL || "https://bundle-cart.replit.app").replace(/\/+$/, "");
+  const callbackUrl = new URL(`${appUrl}/billing/callback`);
+  if (normalizedShop) {
+    callbackUrl.searchParams.set("shop", normalizedShop);
+  }
+  return callbackUrl.toString();
 }
 
 function safeJsonString(value) {
@@ -1033,8 +1248,8 @@ function extractBundleCartSelection(order) {
 }
 
 async function fetchShopifyUsageBillingContext({ shopDomain, accessToken }) {
-  const endpoint = `https://${shopDomain}/admin/api/${SHOPIFY_ADMIN_API_VERSION}/graphql.json`;
-  console.log("BUNDLECART BILLING SUBSCRIPTION CHECK", shopDomain);
+  const normalizedShop = normalizeShopDomain(shopDomain);
+  console.log("BUNDLECART BILLING SUBSCRIPTION CHECK", normalizedShop);
   const query = `
     query BundleCartUsageLineItem {
       currentAppInstallation {
@@ -1059,29 +1274,14 @@ async function fetchShopifyUsageBillingContext({ shopDomain, accessToken }) {
       }
     }
   `;
-
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      "X-Shopify-Access-Token": accessToken
-    },
-    body: JSON.stringify({ query })
+  const data = await callShopifyAdminGraphql({
+    shopDomain: normalizedShop,
+    accessToken,
+    query
   });
 
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(`usage_line_item_lookup_failed_${response.status}:${body}`);
-  }
-
-  const payload = await response.json();
-  if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
-    throw new Error(`usage_line_item_lookup_graphql_error:${JSON.stringify(payload.errors)}`);
-  }
-
-  const subscriptions = Array.isArray(payload?.data?.currentAppInstallation?.activeSubscriptions)
-    ? payload.data.currentAppInstallation.activeSubscriptions
+  const subscriptions = Array.isArray(data?.currentAppInstallation?.activeSubscriptions)
+    ? data.currentAppInstallation.activeSubscriptions
     : [];
   for (const subscription of subscriptions) {
     const status = String(subscription?.status || "").toUpperCase();
@@ -1099,14 +1299,285 @@ async function fetchShopifyUsageBillingContext({ shopDomain, accessToken }) {
       if (cappedAmountValue > 0) {
         return {
           appSubscriptionId: String(subscription?.id || ""),
-          lineItemId: String(lineItem.id)
+          lineItemId: String(lineItem.id),
+          cappedAmount: cappedAmountValue,
+          subscriptionStatus: status || "ACTIVE"
         };
       }
     }
   }
 
-  console.log("BUNDLECART BILLING SUBSCRIPTION MISSING", shopDomain);
+  console.log("BUNDLECART BILLING SUBSCRIPTION MISSING", normalizedShop);
   return null;
+}
+
+async function createBundlecartAppSubscription({ shopDomain, accessToken }) {
+  const normalizedShop = normalizeShopDomain(shopDomain);
+  if (!normalizedShop) {
+    throw new Error("missing_shop_for_subscription_create");
+  }
+
+  console.log("BUNDLECART SUBSCRIPTION CREATE START", normalizedShop);
+  if (SHOPIFY_BILLING_TEST_MODE) {
+    console.log("BUNDLECART SUBSCRIPTION TEST MODE", normalizedShop);
+  }
+
+  const usageCapAmount = getBillingNumericValue(SHOPIFY_BILLING_USAGE_CAP_AMOUNT, 1000);
+  const recurringBaseAmount = getBillingNumericValue(SHOPIFY_BILLING_BASE_PLAN_AMOUNT, 0);
+  const returnUrl = buildBundlecartSubscriptionReturnUrl(normalizedShop);
+  const mutation = `
+    mutation BundleCartSubscriptionCreate(
+      $name: String!
+      $lineItems: [AppSubscriptionLineItemInput!]!
+      $returnUrl: URL!
+      $test: Boolean
+    ) {
+      appSubscriptionCreate(
+        name: $name
+        returnUrl: $returnUrl
+        lineItems: $lineItems
+        test: $test
+      ) {
+        appSubscription {
+          id
+          status
+          lineItems {
+            id
+            plan {
+              pricingDetails {
+                __typename
+                ... on AppUsagePricing {
+                  cappedAmount {
+                    amount
+                    currencyCode
+                  }
+                }
+              }
+            }
+          }
+        }
+        confirmationUrl
+        userErrors {
+          field
+          message
+        }
+      }
+    }
+  `;
+  const variables = {
+    name: SHOPIFY_BILLING_PLAN_NAME || "BundleCart Network Billing",
+    returnUrl,
+    test: SHOPIFY_BILLING_TEST_MODE,
+    lineItems: [
+      {
+        plan: {
+          appRecurringPricingDetails: {
+            interval: "EVERY_30_DAYS",
+            price: {
+              amount: recurringBaseAmount,
+              currencyCode: "USD"
+            }
+          }
+        }
+      },
+      {
+        plan: {
+          appUsagePricingDetails: {
+            terms: "BundleCart network shipping fee",
+            cappedAmount: {
+              amount: usageCapAmount,
+              currencyCode: "USD"
+            }
+          }
+        }
+      }
+    ]
+  };
+
+  const data = await callShopifyAdminGraphql({
+    shopDomain: normalizedShop,
+    accessToken,
+    query: mutation,
+    variables
+  });
+  const createPayload = data?.appSubscriptionCreate;
+  const userErrors = Array.isArray(createPayload?.userErrors) ? createPayload.userErrors : [];
+  if (userErrors.length > 0) {
+    throw new Error(`subscription_create_user_error:${JSON.stringify(userErrors)}`);
+  }
+
+  const confirmationUrl = String(createPayload?.confirmationUrl || "").trim();
+  if (!confirmationUrl) {
+    throw new Error("subscription_create_missing_confirmation_url");
+  }
+
+  const subscription = createPayload?.appSubscription || {};
+  const subscriptionLineItems = Array.isArray(subscription?.lineItems) ? subscription.lineItems : [];
+  const usageLineItem = subscriptionLineItems.find(
+    (item) => item?.plan?.pricingDetails?.__typename === "AppUsagePricing"
+  );
+  const cappedAmountValue = parsePriceAmount(
+    usageLineItem?.plan?.pricingDetails?.cappedAmount?.amount
+  );
+
+  console.log("BUNDLECART SUBSCRIPTION CREATE SUCCESS", normalizedShop);
+  console.log("BUNDLECART SUBSCRIPTION APPROVAL REQUIRED", normalizedShop, confirmationUrl);
+
+  return {
+    confirmationUrl,
+    appSubscriptionId: subscription?.id ? String(subscription.id) : "",
+    lineItemId: usageLineItem?.id ? String(usageLineItem.id) : "",
+    cappedAmount: cappedAmountValue > 0 ? cappedAmountValue : null,
+    subscriptionStatus: String(subscription?.status || "PENDING")
+  };
+}
+
+async function ensureMerchantBillingSubscription({
+  shopDomain,
+  accessToken,
+  createIfMissing = true
+}) {
+  const normalizedShop = normalizeShopDomain(shopDomain);
+  const token = String(accessToken || "").trim();
+  const subscriptionMode = detectBundlecartSubscriptionMode();
+
+  if (!normalizedShop || !token) {
+    return {
+      mode: subscriptionMode.mode,
+      active: false,
+      approvalRequired: false,
+      reason: "missing_shop_or_token"
+    };
+  }
+
+  if (!subscriptionMode.supportsManualUsageBilling) {
+    // Managed pricing stores plan logic in Shopify-managed pricing configuration.
+    // Manual app subscription creation is intentionally skipped in this mode.
+    await upsertMerchantBillingSubscriptionState({
+      shopDomain: normalizedShop,
+      billingMode: subscriptionMode.mode,
+      subscriptionStatus: "managed_mode",
+      lastError: "managed_pricing_mode_manual_subscription_not_created"
+    });
+    return {
+      mode: subscriptionMode.mode,
+      active: false,
+      approvalRequired: false,
+      reason: "managed_mode_manual_subscription_disabled"
+    };
+  }
+
+  try {
+    const usageBillingContext = await fetchShopifyUsageBillingContext({
+      shopDomain: normalizedShop,
+      accessToken: token
+    });
+    if (usageBillingContext?.lineItemId) {
+      await upsertMerchantBillingSubscriptionState({
+        shopDomain: normalizedShop,
+        appSubscriptionId: usageBillingContext.appSubscriptionId || null,
+        lineItemId: usageBillingContext.lineItemId || null,
+        billingMode: subscriptionMode.mode,
+        cappedAmount: usageBillingContext.cappedAmount ?? null,
+        subscriptionStatus: usageBillingContext.subscriptionStatus || "active",
+        confirmationUrl: null,
+        lastError: null
+      });
+      console.log("BUNDLECART SUBSCRIPTION CONFIRMED", normalizedShop);
+      return {
+        mode: subscriptionMode.mode,
+        active: true,
+        approvalRequired: false,
+        context: usageBillingContext
+      };
+    }
+  } catch (lookupError) {
+    await upsertMerchantBillingSubscriptionState({
+      shopDomain: normalizedShop,
+      billingMode: subscriptionMode.mode,
+      subscriptionStatus: "failed",
+      lastError: toBillingFailureReason(lookupError)
+    });
+    console.error("BUNDLECART SUBSCRIPTION CREATE FAILED", normalizedShop, lookupError);
+    return {
+      mode: subscriptionMode.mode,
+      active: false,
+      approvalRequired: false,
+      reason: "subscription_lookup_failed",
+      error: lookupError
+    };
+  }
+
+  const storedSubscription = await getStoredMerchantBillingSubscription(normalizedShop);
+  if (
+    storedSubscription?.subscription_status === "pending_approval" &&
+    storedSubscription?.confirmation_url
+  ) {
+    console.log(
+      "BUNDLECART SUBSCRIPTION APPROVAL REQUIRED",
+      normalizedShop,
+      storedSubscription.confirmation_url
+    );
+    return {
+      mode: subscriptionMode.mode,
+      active: false,
+      approvalRequired: true,
+      confirmationUrl: String(storedSubscription.confirmation_url)
+    };
+  }
+
+  if (!createIfMissing) {
+    await upsertMerchantBillingSubscriptionState({
+      shopDomain: normalizedShop,
+      billingMode: subscriptionMode.mode,
+      subscriptionStatus: "missing",
+      lastError: "missing_active_usage_subscription"
+    });
+    return {
+      mode: subscriptionMode.mode,
+      active: false,
+      approvalRequired: false,
+      reason: "missing_active_usage_subscription"
+    };
+  }
+
+  try {
+    const createdSubscription = await createBundlecartAppSubscription({
+      shopDomain: normalizedShop,
+      accessToken: token
+    });
+    await upsertMerchantBillingSubscriptionState({
+      shopDomain: normalizedShop,
+      appSubscriptionId: createdSubscription.appSubscriptionId || null,
+      lineItemId: createdSubscription.lineItemId || null,
+      billingMode: subscriptionMode.mode,
+      cappedAmount: createdSubscription.cappedAmount ?? null,
+      subscriptionStatus: "pending_approval",
+      confirmationUrl: createdSubscription.confirmationUrl || null,
+      lastError: null
+    });
+    return {
+      mode: subscriptionMode.mode,
+      active: false,
+      approvalRequired: true,
+      confirmationUrl: createdSubscription.confirmationUrl
+    };
+  } catch (createError) {
+    await upsertMerchantBillingSubscriptionState({
+      shopDomain: normalizedShop,
+      billingMode: subscriptionMode.mode,
+      subscriptionStatus: "failed",
+      lastError: toBillingFailureReason(createError)
+    });
+    console.error("BUNDLECART SUBSCRIPTION CREATE FAILED", normalizedShop, createError);
+    return {
+      mode: subscriptionMode.mode,
+      active: false,
+      approvalRequired: false,
+      reason: "subscription_create_failed",
+      error: createError
+    };
+  }
 }
 
 async function createBundlecartUsageCharge({
@@ -1262,7 +1733,10 @@ async function processBundlecartMerchantBilling({
     if (!billingMode.supportsManualUsageBilling) {
       const reason = "managed_pricing_mode_manual_usage_not_supported";
       console.log("BUNDLECART BILLING PREREQUISITE FAILED", normalizedShop, bundleId, reason);
-      await dbPool.query(UPDATE_BUNDLECART_BILLING_FAILED_SQL, [billingRecordId, reason]);
+      await dbPool.query(UPDATE_BUNDLECART_BILLING_FAILED_SQL, [
+        billingRecordId,
+        toBillingFailureReason(reason)
+      ]);
       return;
     }
 
@@ -1271,21 +1745,31 @@ async function processBundlecartMerchantBilling({
     if (!accessToken) {
       const reason = "missing_merchant_access_token";
       console.log("BUNDLECART BILLING PREREQUISITE FAILED", normalizedShop, bundleId, reason);
-      await dbPool.query(UPDATE_BUNDLECART_BILLING_FAILED_SQL, [billingRecordId, reason]);
+      await dbPool.query(UPDATE_BUNDLECART_BILLING_FAILED_SQL, [
+        billingRecordId,
+        toBillingFailureReason(reason)
+      ]);
       return;
     }
 
-    const usageBillingContext = await fetchShopifyUsageBillingContext({
+    const subscriptionCheck = await ensureMerchantBillingSubscription({
       shopDomain: normalizedShop,
-      accessToken
+      accessToken,
+      createIfMissing: true
     });
-    if (!usageBillingContext?.lineItemId) {
-      const reason = "missing_active_usage_billing_subscription";
+    if (!subscriptionCheck?.active || !subscriptionCheck?.context?.lineItemId) {
+      const reason = subscriptionCheck?.approvalRequired
+        ? `subscription_approval_required:${subscriptionCheck.confirmationUrl || ""}`
+        : subscriptionCheck?.reason || "missing_active_usage_billing_subscription";
       console.log("BUNDLECART BILLING SUBSCRIPTION MISSING", normalizedShop);
       console.log("BUNDLECART BILLING PREREQUISITE FAILED", normalizedShop, bundleId, reason);
-      await dbPool.query(UPDATE_BUNDLECART_BILLING_FAILED_SQL, [billingRecordId, reason]);
+      await dbPool.query(UPDATE_BUNDLECART_BILLING_FAILED_SQL, [
+        billingRecordId,
+        toBillingFailureReason(reason)
+      ]);
       return;
     }
+    const usageBillingContext = subscriptionCheck.context;
 
     await dbPool.query(UPDATE_BUNDLECART_BILLING_CONTEXT_SQL, [
       billingRecordId,
@@ -1754,6 +2238,35 @@ export async function ensureBillingTablesExist() {
   }
 }
 
+export async function ensureMerchantBillingSubscriptionsTableExists() {
+  if (!dbPool) {
+    console.warn("DATABASE_URL not set; merchant subscription persistence disabled.");
+    return;
+  }
+
+  console.log("MIGRATION START merchant_billing_subscriptions");
+  try {
+    await dbPool.query(CREATE_MERCHANT_BILLING_SUBSCRIPTIONS_TABLE_SQL);
+    await dbPool.query(ALTER_MERCHANT_BILLING_SUBSCRIPTIONS_ADD_APP_SUBSCRIPTION_ID_SQL);
+    await dbPool.query(ALTER_MERCHANT_BILLING_SUBSCRIPTIONS_ADD_LINE_ITEM_ID_SQL);
+    await dbPool.query(ALTER_MERCHANT_BILLING_SUBSCRIPTIONS_ADD_BILLING_MODE_SQL);
+    await dbPool.query(ALTER_MERCHANT_BILLING_SUBSCRIPTIONS_ADD_CAPPED_AMOUNT_SQL);
+    await dbPool.query(ALTER_MERCHANT_BILLING_SUBSCRIPTIONS_ADD_SUBSCRIPTION_STATUS_SQL);
+    await dbPool.query(ALTER_MERCHANT_BILLING_SUBSCRIPTIONS_ADD_CONFIRMATION_URL_SQL);
+    await dbPool.query(ALTER_MERCHANT_BILLING_SUBSCRIPTIONS_ADD_LAST_ERROR_SQL);
+    await dbPool.query(ALTER_MERCHANT_BILLING_SUBSCRIPTIONS_ADD_CREATED_AT_SQL);
+    await dbPool.query(ALTER_MERCHANT_BILLING_SUBSCRIPTIONS_ADD_UPDATED_AT_SQL);
+    await dbPool.query(CREATE_MERCHANT_BILLING_SUBSCRIPTIONS_SHOP_UNIQUE_INDEX_SQL);
+    console.log("MIGRATION DONE merchant_billing_subscriptions");
+    console.log("DB SCHEMA OK merchant_billing_subscriptions");
+  } catch (error) {
+    console.error("MIGRATION ERROR merchant_billing_subscriptions", error);
+    if (isFatalDbError(error)) {
+      throw error;
+    }
+  }
+}
+
 async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPayload }) {
   if (!dbPool) {
     return;
@@ -2186,6 +2699,7 @@ export function createApp() {
     }
 
     console.log("MERCHANT TOKEN SAVE START", shop);
+    let subscriptionCheckResult = null;
     try {
       if (!dbPool) {
         throw new Error("DATABASE_URL not configured");
@@ -2199,11 +2713,99 @@ export function createApp() {
       } catch (error) {
         console.error("CARRIER SERVICE CREATE ERROR", shop, error);
       }
+
+      subscriptionCheckResult = await ensureMerchantBillingSubscription({
+        shopDomain: shop,
+        accessToken,
+        createIfMissing: true
+      });
     } catch (error) {
       console.error("MERCHANT TOKEN SAVE ERROR", error);
     }
 
+    if (subscriptionCheckResult?.approvalRequired && subscriptionCheckResult?.confirmationUrl) {
+      res.redirect(subscriptionCheckResult.confirmationUrl);
+      return;
+    }
+
     res.redirect("/");
+  });
+
+  app.get("/billing/subscribe", async (req, res) => {
+    const shop = normalizeShopDomain(req.query.shop);
+    if (!shop) {
+      res.status(400).json({ ok: false, error: "Missing shop" });
+      return;
+    }
+    if (!dbPool) {
+      res.status(503).json({ ok: false, error: "Database unavailable" });
+      return;
+    }
+
+    try {
+      const merchantResult = await dbPool.query(SELECT_MERCHANT_ACCESS_TOKEN_SQL, [shop]);
+      const accessToken = String(merchantResult.rows[0]?.access_token || "").trim();
+      if (!accessToken) {
+        res.redirect(`/auth?shop=${encodeURIComponent(shop)}`);
+        return;
+      }
+
+      const subscriptionResult = await ensureMerchantBillingSubscription({
+        shopDomain: shop,
+        accessToken,
+        createIfMissing: true
+      });
+
+      if (subscriptionResult?.approvalRequired && subscriptionResult?.confirmationUrl) {
+        res.redirect(subscriptionResult.confirmationUrl);
+        return;
+      }
+
+      if (subscriptionResult?.active) {
+        res.redirect(`/?shop=${encodeURIComponent(shop)}`);
+        return;
+      }
+
+      res.status(200).json({
+        ok: false,
+        reason: subscriptionResult?.reason || "subscription_not_ready"
+      });
+    } catch (error) {
+      console.error("BUNDLECART SUBSCRIPTION CREATE FAILED", shop, error);
+      res.status(500).json({ ok: false, error: "Subscription setup failed" });
+    }
+  });
+
+  app.get("/billing/callback", async (req, res) => {
+    const shop = normalizeShopDomain(req.query.shop);
+    if (!shop || !dbPool) {
+      res.redirect("/");
+      return;
+    }
+
+    try {
+      const merchantResult = await dbPool.query(SELECT_MERCHANT_ACCESS_TOKEN_SQL, [shop]);
+      const accessToken = String(merchantResult.rows[0]?.access_token || "").trim();
+      if (!accessToken) {
+        res.redirect(`/auth?shop=${encodeURIComponent(shop)}`);
+        return;
+      }
+
+      const subscriptionResult = await ensureMerchantBillingSubscription({
+        shopDomain: shop,
+        accessToken,
+        createIfMissing: false
+      });
+
+      if (subscriptionResult?.approvalRequired && subscriptionResult?.confirmationUrl) {
+        res.redirect(subscriptionResult.confirmationUrl);
+        return;
+      }
+    } catch (error) {
+      console.error("BUNDLECART SUBSCRIPTION CREATE FAILED", shop, error);
+    }
+
+    res.redirect(`/?shop=${encodeURIComponent(shop)}`);
   });
 
   app.use("/api", express.json());
@@ -2488,6 +3090,7 @@ if (isDirectRun && process.env.NODE_ENV !== "test") {
   ensureOrdersTableExists()
     .then(() => ensureLinkingTablesExist())
     .then(() => ensureBillingTablesExist())
+    .then(() => ensureMerchantBillingSubscriptionsTableExists())
     .catch((error) => {
       console.error("Failed to ensure shopify_orders table", error?.message || error);
     })
