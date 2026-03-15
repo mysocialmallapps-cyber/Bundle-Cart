@@ -679,6 +679,40 @@ WHERE bundle_id = $1::integer
 LIMIT 1;
 `;
 
+const SELECT_BUNDLECART_BILLING_BY_ID_SQL = `
+SELECT
+  id,
+  shop_domain,
+  bundle_id,
+  order_id,
+  amount,
+  status,
+  usage_charge_id,
+  idempotency_key,
+  failure_reason
+FROM bundlecart_billing
+WHERE id = $1::integer
+LIMIT 1;
+`;
+
+const SELECT_BILLING_RETRY_ELIGIBLE_SQL = `
+SELECT
+  id,
+  shop_domain,
+  bundle_id,
+  order_id,
+  amount,
+  status,
+  usage_charge_id,
+  idempotency_key,
+  failure_reason
+FROM bundlecart_billing
+WHERE status = 'failed'
+  AND usage_charge_id IS NULL
+ORDER BY created_at ASC
+LIMIT $1::integer;
+`;
+
 const SELECT_MERCHANT_BILLING_SUBSCRIPTION_SQL = `
 SELECT
   id,
@@ -1862,6 +1896,131 @@ async function processBundlecartMerchantBilling({
   }
 }
 
+function isPermanentBillingFailureReason(reason) {
+  const normalizedReason = String(reason || "").toLowerCase();
+  if (!normalizedReason) {
+    return false;
+  }
+  return (
+    normalizedReason.includes("managed_pricing_mode_manual_usage_not_supported") ||
+    normalizedReason.includes("missing_merchant_access_token") ||
+    normalizedReason.includes("subscription_approval_required") ||
+    normalizedReason.includes("missing_active_usage_billing_subscription")
+  );
+}
+
+async function retryFailedBundlecartBilling({ limit = 100 } = {}) {
+  if (!dbPool) {
+    return { ok: false, attempted: 0, succeeded: 0, failed: 0, skipped: 0, reason: "no_db_pool" };
+  }
+
+  const maxLimit = Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 500) : 100;
+  const eligibleResult = await dbPool.query(SELECT_BILLING_RETRY_ELIGIBLE_SQL, [maxLimit]);
+  const rows = eligibleResult.rows;
+  console.log("BUNDLECART BILLING RETRY START", { eligible: rows.length, limit: maxLimit });
+
+  let attempted = 0;
+  let succeeded = 0;
+  let failed = 0;
+  let skipped = 0;
+
+  for (const row of rows) {
+    const billingId = Number(row.id);
+    const shopDomain = String(row.shop_domain || "");
+    const bundleId = Number(row.bundle_id);
+    const orderId = String(row.order_id || "");
+    const amount = Number.parseFloat(String(row.amount ?? "0")) || 0;
+    const failureReason = String(row.failure_reason || "");
+
+    if (!billingId || !shopDomain || !bundleId || !orderId) {
+      skipped += 1;
+      console.error("BUNDLECART BILLING RETRY FAILED", {
+        billingId,
+        reason: "invalid_row"
+      });
+      continue;
+    }
+
+    if (isPermanentBillingFailureReason(failureReason)) {
+      skipped += 1;
+      console.error("BUNDLECART BILLING RETRY FAILED", {
+        billingId,
+        bundleId,
+        orderId,
+        reason: "permanent_failure_reason"
+      });
+      continue;
+    }
+
+    const currentResult = await dbPool.query(SELECT_BUNDLECART_BILLING_BY_ID_SQL, [billingId]);
+    const currentRow = currentResult.rows[0];
+    if (!currentRow || currentRow.usage_charge_id) {
+      skipped += 1;
+      console.log("BUNDLECART BILLING RETRY SKIPPED DUPLICATE", {
+        billingId,
+        bundleId,
+        orderId,
+        reason: "already_has_usage_charge"
+      });
+      continue;
+    }
+
+    attempted += 1;
+    console.log("BUNDLECART BILLING RETRY ATTEMPT", {
+      billingId,
+      shopDomain,
+      bundleId,
+      orderId
+    });
+
+    try {
+      await processBundlecartMerchantBilling({
+        shopDomain,
+        bundleId,
+        orderId,
+        amount
+      });
+
+      const afterResult = await dbPool.query(SELECT_BUNDLECART_BILLING_BY_ID_SQL, [billingId]);
+      const afterRow = afterResult.rows[0];
+      if (afterRow?.status === "success" && afterRow?.usage_charge_id) {
+        succeeded += 1;
+        console.log("BUNDLECART BILLING RETRY SUCCESS", {
+          billingId,
+          bundleId,
+          orderId,
+          usage_charge_id: afterRow.usage_charge_id
+        });
+      } else {
+        failed += 1;
+        console.error("BUNDLECART BILLING RETRY FAILED", {
+          billingId,
+          bundleId,
+          orderId,
+          failure_reason: afterRow?.failure_reason || "unknown"
+        });
+      }
+    } catch (error) {
+      failed += 1;
+      console.error("BUNDLECART BILLING RETRY FAILED", {
+        billingId,
+        bundleId,
+        orderId,
+        error: toBillingFailureReason(error)
+      });
+    }
+  }
+
+  return {
+    ok: true,
+    scanned: rows.length,
+    attempted,
+    succeeded,
+    failed,
+    skipped
+  };
+}
+
 async function registerBundleCartCarrierService({ shopDomain, accessToken }) {
   const normalizedShop = normalizeShopDomain(shopDomain);
   const token = String(accessToken || "").trim();
@@ -2923,6 +3082,32 @@ export function createApp() {
     }
 
     res.redirect(`/dashboard?shop=${encodeURIComponent(shop)}`);
+  });
+
+  app.post("/internal/billing/retry", express.json(), async (req, res) => {
+    const bodyLimit = Number(req.body?.limit);
+    const queryLimit =
+      typeof req.query.limit === "string"
+        ? Number(req.query.limit)
+        : Array.isArray(req.query.limit)
+          ? Number(req.query.limit[0])
+          : Number.NaN;
+    const limit = Number.isFinite(bodyLimit)
+      ? bodyLimit
+      : Number.isFinite(queryLimit)
+        ? queryLimit
+        : 100;
+
+    try {
+      const result = await retryFailedBundlecartBilling({ limit });
+      res.status(200).json(result);
+    } catch (error) {
+      console.error("BUNDLECART BILLING RETRY FAILED", {
+        endpoint: "/internal/billing/retry",
+        error: toBillingFailureReason(error)
+      });
+      res.status(500).json({ ok: false });
+    }
   });
 
   app.get("/dashboard", async (req, res) => {
