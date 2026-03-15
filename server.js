@@ -1325,6 +1325,38 @@ async function createBundlecartAppSubscription({ shopDomain, accessToken }) {
   const usageCapAmount = getBillingNumericValue(SHOPIFY_BILLING_USAGE_CAP_AMOUNT, 1000);
   const recurringBaseAmount = getBillingNumericValue(SHOPIFY_BILLING_BASE_PLAN_AMOUNT, 0);
   const returnUrl = buildBundlecartSubscriptionReturnUrl(normalizedShop);
+  const lineItems = [
+    {
+      plan: {
+        appRecurringPricingDetails: {
+          interval: "EVERY_30_DAYS",
+          price: {
+            amount: recurringBaseAmount,
+            currencyCode: "USD"
+          }
+        }
+      }
+    },
+    {
+      plan: {
+        appUsagePricingDetails: {
+          terms: "BundleCart network shipping fee",
+          cappedAmount: {
+            amount: usageCapAmount,
+            currencyCode: "USD"
+          }
+        }
+      }
+    }
+  ];
+  const requestInputSummary = {
+    planName: SHOPIFY_BILLING_PLAN_NAME || "BundleCart Network Billing",
+    returnUrl,
+    test: SHOPIFY_BILLING_TEST_MODE,
+    cappedAmount: usageCapAmount,
+    lineItemTypes: lineItems.map((item) => Object.keys(item.plan || {}))
+  };
+  console.log("BUNDLECART SUBSCRIPTION CREATE INPUT SUMMARY", JSON.stringify(requestInputSummary));
   const mutation = `
     mutation BundleCartSubscriptionCreate(
       $name: String!
@@ -1368,39 +1400,62 @@ async function createBundlecartAppSubscription({ shopDomain, accessToken }) {
     name: SHOPIFY_BILLING_PLAN_NAME || "BundleCart Network Billing",
     returnUrl,
     test: SHOPIFY_BILLING_TEST_MODE,
-    lineItems: [
-      {
-        plan: {
-          appRecurringPricingDetails: {
-            interval: "EVERY_30_DAYS",
-            price: {
-              amount: recurringBaseAmount,
-              currencyCode: "USD"
-            }
-          }
-        }
-      },
-      {
-        plan: {
-          appUsagePricingDetails: {
-            terms: "BundleCart network shipping fee",
-            cappedAmount: {
-              amount: usageCapAmount,
-              currencyCode: "USD"
-            }
-          }
-        }
-      }
-    ]
+    lineItems
   };
 
-  const data = await callShopifyAdminGraphql({
-    shopDomain: normalizedShop,
-    accessToken,
-    query: mutation,
-    variables
-  });
-  const createPayload = data?.appSubscriptionCreate;
+  let payload = null;
+  try {
+    const endpoint = `https://${normalizedShop}/admin/api/${SHOPIFY_ADMIN_API_VERSION}/graphql.json`;
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-Shopify-Access-Token": accessToken
+      },
+      body: JSON.stringify({ query: mutation, variables })
+    });
+
+    const responseText = await response.text();
+    try {
+      payload = responseText ? JSON.parse(responseText) : {};
+    } catch (parseError) {
+      console.error("BUNDLECART SUBSCRIPTION CREATE RESPONSE PARSE ERROR", parseError);
+      console.error("BUNDLECART SUBSCRIPTION CREATE RAW RESPONSE", responseText);
+      throw new Error(`subscription_create_response_parse_error:${response.status}`);
+    }
+
+    const topLevelErrors = Array.isArray(payload?.errors) ? payload.errors : [];
+    const userErrors = Array.isArray(payload?.data?.appSubscriptionCreate?.userErrors)
+      ? payload.data.appSubscriptionCreate.userErrors
+      : [];
+
+    if (!response.ok || topLevelErrors.length > 0 || userErrors.length > 0) {
+      console.error("BUNDLECART SUBSCRIPTION CREATE USER ERRORS", JSON.stringify(userErrors));
+      console.error(
+        "BUNDLECART SUBSCRIPTION CREATE TOP LEVEL ERRORS",
+        JSON.stringify(topLevelErrors)
+      );
+      console.error(
+        "BUNDLECART SUBSCRIPTION CREATE REQUEST INPUT",
+        JSON.stringify(requestInputSummary)
+      );
+      console.error("BUNDLECART SUBSCRIPTION CREATE GRAPHQL RESPONSE", JSON.stringify(payload));
+
+      if (!response.ok) {
+        throw new Error(`subscription_create_http_error:${response.status}`);
+      }
+      if (userErrors.length > 0) {
+        throw new Error(`subscription_create_user_error:${JSON.stringify(userErrors)}`);
+      }
+      throw new Error(`subscription_create_top_level_error:${JSON.stringify(topLevelErrors)}`);
+    }
+  } catch (error) {
+    // Keep throwing to preserve existing control flow; this block is diagnostics-focused.
+    throw error;
+  }
+
+  const createPayload = payload?.data?.appSubscriptionCreate;
   const userErrors = Array.isArray(createPayload?.userErrors) ? createPayload.userErrors : [];
   if (userErrors.length > 0) {
     throw new Error(`subscription_create_user_error:${JSON.stringify(userErrors)}`);
