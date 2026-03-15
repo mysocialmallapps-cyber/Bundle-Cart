@@ -35,6 +35,14 @@ const BUNDLECART_EMAIL_WEBHOOK_URL = String(process.env.BUNDLECART_EMAIL_WEBHOOK
 const BUNDLECART_EMAIL_WEBHOOK_AUTH_TOKEN = String(
   process.env.BUNDLECART_EMAIL_WEBHOOK_AUTH_TOKEN || ""
 ).trim();
+const SHOPIFY_BILLING_MODE = String(process.env.SHOPIFY_BILLING_MODE || "manual")
+  .trim()
+  .toLowerCase();
+const SHOPIFY_BILLING_TEST_MODE = ["1", "true", "yes", "on"].includes(
+  String(process.env.SHOPIFY_BILLING_TEST_MODE || "")
+    .trim()
+    .toLowerCase()
+);
 
 const CREATE_SHOPIFY_ORDERS_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS shopify_orders (
@@ -116,8 +124,13 @@ CREATE TABLE IF NOT EXISTS bundlecart_billing (
   bundle_id INTEGER NOT NULL REFERENCES link_groups(id) ON DELETE CASCADE,
   order_id BIGINT NOT NULL,
   usage_charge_id TEXT,
+  app_subscription_id TEXT,
+  line_item_id TEXT,
+  idempotency_key TEXT,
+  billing_mode TEXT,
   amount NUMERIC(10,2) NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending',
+  failure_reason TEXT,
   created_at TIMESTAMP DEFAULT NOW(),
   billed_at TIMESTAMP,
   CONSTRAINT bundlecart_billing_status_ck CHECK (status IN ('pending', 'success', 'failed'))
@@ -127,6 +140,12 @@ CREATE TABLE IF NOT EXISTS bundlecart_billing (
 const CREATE_BUNDLECART_BILLING_UNIQUE_INDEX_SQL = `
 CREATE UNIQUE INDEX IF NOT EXISTS bundlecart_billing_bundle_id_uq
 ON bundlecart_billing (bundle_id);
+`;
+
+const CREATE_BUNDLECART_BILLING_IDEMPOTENCY_UNIQUE_INDEX_SQL = `
+CREATE UNIQUE INDEX IF NOT EXISTS bundlecart_billing_idempotency_key_uq
+ON bundlecart_billing (idempotency_key)
+WHERE idempotency_key IS NOT NULL;
 `;
 
 const CREATE_LINKED_ORDERS_UNIQUE_INDEX_SQL = `
@@ -549,6 +568,26 @@ const ALTER_LINKED_ORDERS_ADD_INSERTED_AT_SQL = `
 ALTER TABLE linked_orders ADD COLUMN IF NOT EXISTS inserted_at TIMESTAMP DEFAULT NOW();
 `;
 
+const ALTER_BUNDLECART_BILLING_ADD_APP_SUBSCRIPTION_ID_SQL = `
+ALTER TABLE bundlecart_billing ADD COLUMN IF NOT EXISTS app_subscription_id TEXT;
+`;
+
+const ALTER_BUNDLECART_BILLING_ADD_LINE_ITEM_ID_SQL = `
+ALTER TABLE bundlecart_billing ADD COLUMN IF NOT EXISTS line_item_id TEXT;
+`;
+
+const ALTER_BUNDLECART_BILLING_ADD_IDEMPOTENCY_KEY_SQL = `
+ALTER TABLE bundlecart_billing ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+`;
+
+const ALTER_BUNDLECART_BILLING_ADD_BILLING_MODE_SQL = `
+ALTER TABLE bundlecart_billing ADD COLUMN IF NOT EXISTS billing_mode TEXT;
+`;
+
+const ALTER_BUNDLECART_BILLING_ADD_FAILURE_REASON_SQL = `
+ALTER TABLE bundlecart_billing ADD COLUMN IF NOT EXISTS failure_reason TEXT;
+`;
+
 const UPSERT_MERCHANT_TOKEN_SQL = `
 INSERT INTO merchants (name, domain, is_active, access_token, created_at, updated_at)
 VALUES ($1, $1, TRUE, $2, NOW(), NOW())
@@ -567,11 +606,20 @@ WHERE domain = $1::text
 LIMIT 1;
 `;
 
+const SELECT_BUNDLECART_BILLING_BY_BUNDLE_SQL = `
+SELECT id, status, idempotency_key
+FROM bundlecart_billing
+WHERE bundle_id = $1::integer
+LIMIT 1;
+`;
+
 const INSERT_BUNDLECART_BILLING_PENDING_SQL = `
 INSERT INTO bundlecart_billing (
   shop_domain,
   bundle_id,
   order_id,
+  idempotency_key,
+  billing_mode,
   amount,
   status,
   created_at
@@ -580,7 +628,9 @@ VALUES (
   $1::text,
   $2::integer,
   $3::bigint,
-  $4::numeric,
+  $4::text,
+  $5::text,
+  $6::numeric,
   'pending',
   NOW()
 )
@@ -588,17 +638,48 @@ ON CONFLICT (bundle_id) DO NOTHING
 RETURNING id;
 `;
 
+const UPDATE_BUNDLECART_BILLING_RETRY_PENDING_SQL = `
+UPDATE bundlecart_billing
+SET shop_domain = $2::text,
+    order_id = $3::bigint,
+    idempotency_key = $4::text,
+    billing_mode = $5::text,
+    amount = $6::numeric,
+    status = 'pending',
+    usage_charge_id = NULL,
+    app_subscription_id = NULL,
+    line_item_id = NULL,
+    failure_reason = NULL,
+    billed_at = NULL
+WHERE id = $1::integer;
+`;
+
+const UPDATE_BUNDLECART_BILLING_CONTEXT_SQL = `
+UPDATE bundlecart_billing
+SET app_subscription_id = $2::text,
+    line_item_id = $3::text,
+    idempotency_key = $4::text,
+    billing_mode = $5::text
+WHERE id = $1::integer;
+`;
+
 const UPDATE_BUNDLECART_BILLING_SUCCESS_SQL = `
 UPDATE bundlecart_billing
 SET status = 'success',
     usage_charge_id = $2::text,
+    app_subscription_id = $3::text,
+    line_item_id = $4::text,
+    idempotency_key = $5::text,
+    billing_mode = $6::text,
+    failure_reason = NULL,
     billed_at = NOW()
 WHERE id = $1::integer;
 `;
 
 const UPDATE_BUNDLECART_BILLING_FAILED_SQL = `
 UPDATE bundlecart_billing
-SET status = 'failed'
+SET status = 'failed',
+    failure_reason = $2::text
 WHERE id = $1::integer;
 `;
 
@@ -715,6 +796,36 @@ function normalizeCurrencyCode(value) {
 function isBundleCartPaidFiveUsd({ amount, currency }) {
   const normalizedCurrency = normalizeCurrencyCode(currency);
   return normalizedCurrency === "USD" && Math.abs(Number(amount || 0) - 5) < 0.000001;
+}
+
+function detectBundlecartBillingMode() {
+  // Managed pricing is controlled directly in Shopify's managed plans UI.
+  // In that mode, this app must not fake manual usage billing records.
+  const mode = SHOPIFY_BILLING_MODE === "managed" ? "managed" : "manual";
+  console.log("BUNDLECART BILLING MODE DETECTED", mode);
+  return {
+    mode,
+    supportsManualUsageBilling: mode === "manual"
+  };
+}
+
+function buildBundlecartBillingIdempotencyKey({ shopDomain, bundleId, orderId, amount }) {
+  const normalizedShop = normalizeShopDomain(shopDomain);
+  const keySource = [
+    normalizedShop,
+    String(bundleId || ""),
+    String(orderId || ""),
+    Number(amount || 0).toFixed(2)
+  ].join("|");
+  return crypto.createHash("sha256").update(keySource).digest("hex");
+}
+
+function toBillingFailureReason(errorOrReason) {
+  const raw =
+    typeof errorOrReason === "string"
+      ? errorOrReason
+      : String(errorOrReason?.message || "billing_error");
+  return raw.slice(0, 300);
 }
 
 function safeJsonString(value) {
@@ -921,17 +1032,26 @@ function extractBundleCartSelection(order) {
   };
 }
 
-async function fetchShopifyUsagePricingLineItemId({ shopDomain, accessToken }) {
+async function fetchShopifyUsageBillingContext({ shopDomain, accessToken }) {
   const endpoint = `https://${shopDomain}/admin/api/${SHOPIFY_ADMIN_API_VERSION}/graphql.json`;
+  console.log("BUNDLECART BILLING SUBSCRIPTION CHECK", shopDomain);
   const query = `
     query BundleCartUsageLineItem {
       currentAppInstallation {
         activeSubscriptions {
+          id
+          status
           lineItems {
             id
             plan {
               pricingDetails {
                 __typename
+                ... on AppUsagePricing {
+                  cappedAmount {
+                    amount
+                    currencyCode
+                  }
+                }
               }
             }
           }
@@ -964,34 +1084,50 @@ async function fetchShopifyUsagePricingLineItemId({ shopDomain, accessToken }) {
     ? payload.data.currentAppInstallation.activeSubscriptions
     : [];
   for (const subscription of subscriptions) {
+    const status = String(subscription?.status || "").toUpperCase();
+    if (status && status !== "ACTIVE") {
+      continue;
+    }
     const lineItems = Array.isArray(subscription?.lineItems) ? subscription.lineItems : [];
     for (const lineItem of lineItems) {
-      if (lineItem?.plan?.pricingDetails?.__typename === "AppUsagePricing" && lineItem?.id) {
-        return String(lineItem.id);
+      if (lineItem?.plan?.pricingDetails?.__typename !== "AppUsagePricing" || !lineItem?.id) {
+        continue;
+      }
+      const cappedAmountValue = parsePriceAmount(
+        lineItem?.plan?.pricingDetails?.cappedAmount?.amount
+      );
+      if (cappedAmountValue > 0) {
+        return {
+          appSubscriptionId: String(subscription?.id || ""),
+          lineItemId: String(lineItem.id)
+        };
       }
     }
   }
 
-  throw new Error("usage_line_item_not_found");
+  console.log("BUNDLECART BILLING SUBSCRIPTION MISSING", shopDomain);
+  return null;
 }
 
 async function createBundlecartUsageCharge({
   shopDomain,
   accessToken,
+  subscriptionLineItemId,
+  idempotencyKey,
   bundleId,
   orderId,
   amount
 }) {
   const normalizedShop = normalizeShopDomain(shopDomain);
   const token = String(accessToken || "").trim();
-  if (!normalizedShop || !token) {
+  if (!normalizedShop || !token || !subscriptionLineItemId || !idempotencyKey) {
     throw new Error("missing_shop_or_token_for_billing");
   }
 
-  const subscriptionLineItemId = await fetchShopifyUsagePricingLineItemId({
-    shopDomain: normalizedShop,
-    accessToken: token
-  });
+  if (SHOPIFY_BILLING_TEST_MODE) {
+    console.log("BUNDLECART BILLING TEST MODE", normalizedShop, bundleId, orderId);
+    return `test_mode_${idempotencyKey}`;
+  }
 
   const endpoint = `https://${normalizedShop}/admin/api/${SHOPIFY_ADMIN_API_VERSION}/graphql.json`;
   const mutation = `
@@ -999,11 +1135,13 @@ async function createBundlecartUsageCharge({
       $description: String!
       $price: MoneyInput!
       $subscriptionLineItemId: ID!
+      $idempotencyKey: String!
     ) {
       appUsageRecordCreate(
         description: $description
         price: $price
         subscriptionLineItemId: $subscriptionLineItemId
+        idempotencyKey: $idempotencyKey
       ) {
         appUsageRecord {
           id
@@ -1021,7 +1159,8 @@ async function createBundlecartUsageCharge({
       amount: Number(amount || 0),
       currencyCode: "USD"
     },
-    subscriptionLineItemId
+    subscriptionLineItemId,
+    idempotencyKey
   };
 
   const response = await fetch(endpoint, {
@@ -1074,40 +1213,112 @@ async function processBundlecartMerchantBilling({
   }
 
   console.log("BUNDLECART MERCHANT BILLING START", normalizedShop, bundleId, orderId);
-
-  const pendingResult = await dbPool.query(INSERT_BUNDLECART_BILLING_PENDING_SQL, [
-    normalizedShop,
+  const billingMode = detectBundlecartBillingMode();
+  const idempotencyKey = buildBundlecartBillingIdempotencyKey({
+    shopDomain: normalizedShop,
     bundleId,
     orderId,
     amount
-  ]);
+  });
+  console.log("BUNDLECART BILLING IDEMPOTENCY KEY GENERATED", idempotencyKey);
 
-  if (pendingResult.rowCount === 0) {
-    console.log("BUNDLECART BILLING SKIPPED DUPLICATE", normalizedShop, bundleId, orderId);
-    return;
+  let billingRecordId = null;
+  const existingBillingResult = await dbPool.query(SELECT_BUNDLECART_BILLING_BY_BUNDLE_SQL, [bundleId]);
+  if (existingBillingResult.rowCount > 0) {
+    const existingBilling = existingBillingResult.rows[0];
+    const existingStatus = String(existingBilling.status || "").toLowerCase();
+    if (existingStatus === "success" || existingStatus === "pending") {
+      console.log("BUNDLECART BILLING SKIPPED DUPLICATE", normalizedShop, bundleId, orderId);
+      return;
+    }
+
+    billingRecordId = existingBilling.id;
+    await dbPool.query(UPDATE_BUNDLECART_BILLING_RETRY_PENDING_SQL, [
+      billingRecordId,
+      normalizedShop,
+      orderId,
+      idempotencyKey,
+      billingMode.mode,
+      amount
+    ]);
+  } else {
+    const pendingResult = await dbPool.query(INSERT_BUNDLECART_BILLING_PENDING_SQL, [
+      normalizedShop,
+      bundleId,
+      orderId,
+      idempotencyKey,
+      billingMode.mode,
+      amount
+    ]);
+
+    if (pendingResult.rowCount === 0) {
+      console.log("BUNDLECART BILLING SKIPPED DUPLICATE", normalizedShop, bundleId, orderId);
+      return;
+    }
+    billingRecordId = pendingResult.rows[0].id;
   }
 
-  const billingRecordId = pendingResult.rows[0].id;
-
   try {
+    if (!billingMode.supportsManualUsageBilling) {
+      const reason = "managed_pricing_mode_manual_usage_not_supported";
+      console.log("BUNDLECART BILLING PREREQUISITE FAILED", normalizedShop, bundleId, reason);
+      await dbPool.query(UPDATE_BUNDLECART_BILLING_FAILED_SQL, [billingRecordId, reason]);
+      return;
+    }
+
     const merchantResult = await dbPool.query(SELECT_MERCHANT_ACCESS_TOKEN_SQL, [normalizedShop]);
     const accessToken = String(merchantResult.rows[0]?.access_token || "").trim();
     if (!accessToken) {
-      throw new Error("missing_merchant_access_token");
+      const reason = "missing_merchant_access_token";
+      console.log("BUNDLECART BILLING PREREQUISITE FAILED", normalizedShop, bundleId, reason);
+      await dbPool.query(UPDATE_BUNDLECART_BILLING_FAILED_SQL, [billingRecordId, reason]);
+      return;
     }
+
+    const usageBillingContext = await fetchShopifyUsageBillingContext({
+      shopDomain: normalizedShop,
+      accessToken
+    });
+    if (!usageBillingContext?.lineItemId) {
+      const reason = "missing_active_usage_billing_subscription";
+      console.log("BUNDLECART BILLING SUBSCRIPTION MISSING", normalizedShop);
+      console.log("BUNDLECART BILLING PREREQUISITE FAILED", normalizedShop, bundleId, reason);
+      await dbPool.query(UPDATE_BUNDLECART_BILLING_FAILED_SQL, [billingRecordId, reason]);
+      return;
+    }
+
+    await dbPool.query(UPDATE_BUNDLECART_BILLING_CONTEXT_SQL, [
+      billingRecordId,
+      usageBillingContext.appSubscriptionId || null,
+      usageBillingContext.lineItemId || null,
+      idempotencyKey,
+      billingMode.mode
+    ]);
 
     const usageChargeId = await createBundlecartUsageCharge({
       shopDomain: normalizedShop,
       accessToken,
+      subscriptionLineItemId: usageBillingContext.lineItemId,
+      idempotencyKey,
       bundleId,
       orderId,
       amount
     });
 
-    await dbPool.query(UPDATE_BUNDLECART_BILLING_SUCCESS_SQL, [billingRecordId, usageChargeId]);
+    await dbPool.query(UPDATE_BUNDLECART_BILLING_SUCCESS_SQL, [
+      billingRecordId,
+      usageChargeId,
+      usageBillingContext.appSubscriptionId || null,
+      usageBillingContext.lineItemId || null,
+      idempotencyKey,
+      billingMode.mode
+    ]);
     console.log("BUNDLECART MERCHANT BILLED 5 USD", normalizedShop, bundleId, orderId, usageChargeId);
   } catch (error) {
-    await dbPool.query(UPDATE_BUNDLECART_BILLING_FAILED_SQL, [billingRecordId]);
+    await dbPool.query(UPDATE_BUNDLECART_BILLING_FAILED_SQL, [
+      billingRecordId,
+      toBillingFailureReason(error)
+    ]);
     console.error("BUNDLECART BILLING FAILED", normalizedShop, bundleId, orderId, error);
   }
 }
@@ -1526,7 +1737,13 @@ export async function ensureBillingTablesExist() {
   console.log("MIGRATION START bundlecart_billing");
   try {
     await dbPool.query(CREATE_BUNDLECART_BILLING_TABLE_SQL);
+    await dbPool.query(ALTER_BUNDLECART_BILLING_ADD_APP_SUBSCRIPTION_ID_SQL);
+    await dbPool.query(ALTER_BUNDLECART_BILLING_ADD_LINE_ITEM_ID_SQL);
+    await dbPool.query(ALTER_BUNDLECART_BILLING_ADD_IDEMPOTENCY_KEY_SQL);
+    await dbPool.query(ALTER_BUNDLECART_BILLING_ADD_BILLING_MODE_SQL);
+    await dbPool.query(ALTER_BUNDLECART_BILLING_ADD_FAILURE_REASON_SQL);
     await dbPool.query(CREATE_BUNDLECART_BILLING_UNIQUE_INDEX_SQL);
+    await dbPool.query(CREATE_BUNDLECART_BILLING_IDEMPOTENCY_UNIQUE_INDEX_SQL);
     console.log("MIGRATION DONE bundlecart_billing");
     console.log("DB SCHEMA OK bundlecart_billing");
   } catch (error) {
