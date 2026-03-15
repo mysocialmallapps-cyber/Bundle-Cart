@@ -2016,6 +2016,61 @@ async function findMerchantAuthByShop(shopDomain) {
   }
 }
 
+async function enforceBundlecartBillingAccess(req, res, options = {}) {
+  const { allowMissingShop = false } = options;
+  const shop = normalizeShopDomain(req.query.shop);
+  console.log("BUNDLECART BILLING ACCESS CHECK", {
+    path: req.path,
+    shop: shop || "",
+    allowMissingShop
+  });
+
+  if (!shop) {
+    return { allowed: Boolean(allowMissingShop), shop: "" };
+  }
+
+  if (!dbPool) {
+    res.status(503).send("Billing check unavailable");
+    return { allowed: false, shop };
+  }
+
+  const subscriptionMode = detectBundlecartSubscriptionMode();
+  if (!subscriptionMode.supportsManualUsageBilling) {
+    console.log("BUNDLECART BILLING ACTIVE", shop, "managed_mode");
+    return { allowed: true, shop };
+  }
+
+  const merchantAuth = await findMerchantAuthByShop(shop);
+  if (!merchantAuth.exists || !merchantAuth.tokenPresent) {
+    res.redirect(`/auth?shop=${encodeURIComponent(shop)}`);
+    return { allowed: false, shop };
+  }
+
+  const merchantResult = await dbPool.query(SELECT_MERCHANT_ACCESS_TOKEN_SQL, [shop]);
+  const accessToken = String(merchantResult.rows[0]?.access_token || "").trim();
+  if (!accessToken) {
+    res.redirect(`/auth?shop=${encodeURIComponent(shop)}`);
+    return { allowed: false, shop };
+  }
+
+  const subscriptionResult = await ensureMerchantBillingSubscription({
+    shopDomain: shop,
+    accessToken,
+    createIfMissing: true
+  });
+
+  if (subscriptionResult?.active) {
+    console.log("BUNDLECART BILLING ACTIVE", shop);
+    return { allowed: true, shop };
+  }
+
+  const billingRedirectUrl =
+    subscriptionResult?.confirmationUrl || `/billing/subscribe?shop=${encodeURIComponent(shop)}`;
+  console.log("BUNDLECART REDIRECTING TO BILLING", shop, billingRedirectUrl);
+  res.redirect(billingRedirectUrl);
+  return { allowed: false, shop };
+}
+
 async function registerCarrierServiceForActiveMerchants() {
   if (!dbPool) {
     return;
@@ -2779,11 +2834,12 @@ export function createApp() {
     }
 
     if (subscriptionCheckResult?.approvalRequired && subscriptionCheckResult?.confirmationUrl) {
+      console.log("BUNDLECART REDIRECTING TO BILLING", shop, subscriptionCheckResult.confirmationUrl);
       res.redirect(subscriptionCheckResult.confirmationUrl);
       return;
     }
 
-    res.redirect("/");
+    res.redirect(`/dashboard?shop=${encodeURIComponent(shop)}`);
   });
 
   app.get("/billing/subscribe", async (req, res) => {
@@ -2812,12 +2868,14 @@ export function createApp() {
       });
 
       if (subscriptionResult?.approvalRequired && subscriptionResult?.confirmationUrl) {
+        console.log("BUNDLECART REDIRECTING TO BILLING", shop, subscriptionResult.confirmationUrl);
         res.redirect(subscriptionResult.confirmationUrl);
         return;
       }
 
       if (subscriptionResult?.active) {
-        res.redirect(`/?shop=${encodeURIComponent(shop)}`);
+        console.log("BUNDLECART BILLING ACTIVE", shop);
+        res.redirect(`/dashboard?shop=${encodeURIComponent(shop)}`);
         return;
       }
 
@@ -2853,14 +2911,26 @@ export function createApp() {
       });
 
       if (subscriptionResult?.approvalRequired && subscriptionResult?.confirmationUrl) {
+        console.log("BUNDLECART REDIRECTING TO BILLING", shop, subscriptionResult.confirmationUrl);
         res.redirect(subscriptionResult.confirmationUrl);
         return;
+      }
+      if (subscriptionResult?.active) {
+        console.log("BUNDLECART BILLING ACTIVE", shop);
       }
     } catch (error) {
       console.error("BUNDLECART SUBSCRIPTION CREATE FAILED", shop, error);
     }
 
-    res.redirect(`/?shop=${encodeURIComponent(shop)}`);
+    res.redirect(`/dashboard?shop=${encodeURIComponent(shop)}`);
+  });
+
+  app.get("/dashboard", async (req, res) => {
+    const accessCheck = await enforceBundlecartBillingAccess(req, res);
+    if (!accessCheck.allowed) {
+      return;
+    }
+    res.sendFile(path.join(DIST_PATH, "index.html"));
   });
 
   app.use("/api", express.json());
@@ -3103,28 +3173,32 @@ export function createApp() {
       );
   });
 
-  app.get("/admin/bundles", requireBundleAdminAuth, (_req, res) => {
+  app.get("/admin/bundles", requireBundleAdminAuth, async (req, res) => {
+    const accessCheck = await enforceBundlecartBillingAccess(req, res, { allowMissingShop: true });
+    if (!accessCheck.allowed) {
+      return;
+    }
     res.sendFile(path.join(DIST_PATH, "index.html"));
   });
 
-  app.get("/admin/bundles/:id", requireBundleAdminAuth, (_req, res) => {
+  app.get("/admin/bundles/:id", requireBundleAdminAuth, async (req, res) => {
+    const accessCheck = await enforceBundlecartBillingAccess(req, res, { allowMissingShop: true });
+    if (!accessCheck.allowed) {
+      return;
+    }
     res.sendFile(path.join(DIST_PATH, "index.html"));
   });
 
   app.get("/", async (req, res) => {
-    const shop = normalizeShopDomain(req.query.shop);
-    if (!shop) {
+    const accessCheck = await enforceBundlecartBillingAccess(req, res, { allowMissingShop: true });
+    if (!accessCheck.allowed) {
+      return;
+    }
+    if (!accessCheck.shop) {
       res.status(200).send("ok");
       return;
     }
-
-    const merchantAuth = await findMerchantAuthByShop(shop);
-    if (!merchantAuth.exists || !merchantAuth.tokenPresent) {
-      console.log("APP ROOT AUTH REDIRECT", shop);
-      res.redirect(`/auth?shop=${encodeURIComponent(shop)}`);
-      return;
-    }
-
+    const shop = accessCheck.shop;
     console.log("APP ROOT AUTHORIZED", shop);
     res.status(200).send("ok");
   });
