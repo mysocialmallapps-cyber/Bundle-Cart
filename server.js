@@ -102,10 +102,31 @@ CREATE TABLE IF NOT EXISTS linked_orders (
   group_id INTEGER REFERENCES link_groups(id) ON DELETE SET NULL,
   bundlecart_selected BOOLEAN DEFAULT FALSE,
   bundlecart_paid BOOLEAN DEFAULT FALSE,
+  bundlecart_fee_amount NUMERIC(10,2) DEFAULT 0,
   address_hash TEXT,
   created_at TIMESTAMP,
   inserted_at TIMESTAMP DEFAULT NOW()
 );
+`;
+
+const CREATE_BUNDLECART_BILLING_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS bundlecart_billing (
+  id SERIAL PRIMARY KEY,
+  shop_domain TEXT NOT NULL,
+  bundle_id INTEGER NOT NULL REFERENCES link_groups(id) ON DELETE CASCADE,
+  order_id BIGINT NOT NULL,
+  usage_charge_id TEXT,
+  amount NUMERIC(10,2) NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at TIMESTAMP DEFAULT NOW(),
+  billed_at TIMESTAMP,
+  CONSTRAINT bundlecart_billing_status_ck CHECK (status IN ('pending', 'success', 'failed'))
+);
+`;
+
+const CREATE_BUNDLECART_BILLING_UNIQUE_INDEX_SQL = `
+CREATE UNIQUE INDEX IF NOT EXISTS bundlecart_billing_bundle_id_uq
+ON bundlecart_billing (bundle_id);
 `;
 
 const CREATE_LINKED_ORDERS_UNIQUE_INDEX_SQL = `
@@ -176,6 +197,7 @@ INSERT INTO linked_orders (
   email,
   bundlecart_selected,
   bundlecart_paid,
+  bundlecart_fee_amount,
   address_hash,
   created_at
 )
@@ -186,8 +208,9 @@ VALUES (
   $4::text,
   $5::boolean,
   $6::boolean,
-  $7::text,
-  $8::timestamp
+  $7::numeric,
+  $8::text,
+  $9::timestamp
 )
 ON CONFLICT (shop_domain, shopify_order_id) DO NOTHING
 RETURNING id;
@@ -510,6 +533,10 @@ const ALTER_LINKED_ORDERS_ADD_BUNDLECART_PAID_SQL = `
 ALTER TABLE linked_orders ADD COLUMN IF NOT EXISTS bundlecart_paid BOOLEAN DEFAULT FALSE;
 `;
 
+const ALTER_LINKED_ORDERS_ADD_BUNDLECART_FEE_AMOUNT_SQL = `
+ALTER TABLE linked_orders ADD COLUMN IF NOT EXISTS bundlecart_fee_amount NUMERIC(10,2) DEFAULT 0;
+`;
+
 const ALTER_LINKED_ORDERS_ADD_ADDRESS_HASH_SQL = `
 ALTER TABLE linked_orders ADD COLUMN IF NOT EXISTS address_hash TEXT;
 `;
@@ -531,6 +558,48 @@ DO UPDATE SET
   is_active = TRUE,
   access_token = EXCLUDED.access_token,
   updated_at = NOW();
+`;
+
+const SELECT_MERCHANT_ACCESS_TOKEN_SQL = `
+SELECT access_token
+FROM merchants
+WHERE domain = $1::text
+LIMIT 1;
+`;
+
+const INSERT_BUNDLECART_BILLING_PENDING_SQL = `
+INSERT INTO bundlecart_billing (
+  shop_domain,
+  bundle_id,
+  order_id,
+  amount,
+  status,
+  created_at
+)
+VALUES (
+  $1::text,
+  $2::integer,
+  $3::bigint,
+  $4::numeric,
+  'pending',
+  NOW()
+)
+ON CONFLICT (bundle_id) DO NOTHING
+RETURNING id;
+`;
+
+const UPDATE_BUNDLECART_BILLING_SUCCESS_SQL = `
+UPDATE bundlecart_billing
+SET status = 'success',
+    usage_charge_id = $2::text,
+    billed_at = NOW()
+WHERE id = $1::integer;
+`;
+
+const UPDATE_BUNDLECART_BILLING_FAILED_SQL = `
+UPDATE bundlecart_billing
+SET status = 'failed'
+WHERE id = $1::integer;
 `;
 
 const SELECT_DEBUG_MERCHANTS_SQL = `
@@ -635,6 +704,17 @@ function getOrderShippingAddress(order) {
 function parsePriceAmount(value) {
   const amount = Number.parseFloat(String(value ?? ""));
   return Number.isFinite(amount) ? amount : 0;
+}
+
+function normalizeCurrencyCode(value) {
+  return String(value || "USD")
+    .trim()
+    .toUpperCase();
+}
+
+function isBundleCartPaidFiveUsd({ amount, currency }) {
+  const normalizedCurrency = normalizeCurrencyCode(currency);
+  return normalizedCurrency === "USD" && Math.abs(Number(amount || 0) - 5) < 0.000001;
 }
 
 function safeJsonString(value) {
@@ -839,6 +919,197 @@ function extractBundleCartSelection(order) {
     free: amount === 0,
     amount
   };
+}
+
+async function fetchShopifyUsagePricingLineItemId({ shopDomain, accessToken }) {
+  const endpoint = `https://${shopDomain}/admin/api/${SHOPIFY_ADMIN_API_VERSION}/graphql.json`;
+  const query = `
+    query BundleCartUsageLineItem {
+      currentAppInstallation {
+        activeSubscriptions {
+          lineItems {
+            id
+            plan {
+              pricingDetails {
+                __typename
+              }
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "X-Shopify-Access-Token": accessToken
+    },
+    body: JSON.stringify({ query })
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`usage_line_item_lookup_failed_${response.status}:${body}`);
+  }
+
+  const payload = await response.json();
+  if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
+    throw new Error(`usage_line_item_lookup_graphql_error:${JSON.stringify(payload.errors)}`);
+  }
+
+  const subscriptions = Array.isArray(payload?.data?.currentAppInstallation?.activeSubscriptions)
+    ? payload.data.currentAppInstallation.activeSubscriptions
+    : [];
+  for (const subscription of subscriptions) {
+    const lineItems = Array.isArray(subscription?.lineItems) ? subscription.lineItems : [];
+    for (const lineItem of lineItems) {
+      if (lineItem?.plan?.pricingDetails?.__typename === "AppUsagePricing" && lineItem?.id) {
+        return String(lineItem.id);
+      }
+    }
+  }
+
+  throw new Error("usage_line_item_not_found");
+}
+
+async function createBundlecartUsageCharge({
+  shopDomain,
+  accessToken,
+  bundleId,
+  orderId,
+  amount
+}) {
+  const normalizedShop = normalizeShopDomain(shopDomain);
+  const token = String(accessToken || "").trim();
+  if (!normalizedShop || !token) {
+    throw new Error("missing_shop_or_token_for_billing");
+  }
+
+  const subscriptionLineItemId = await fetchShopifyUsagePricingLineItemId({
+    shopDomain: normalizedShop,
+    accessToken: token
+  });
+
+  const endpoint = `https://${normalizedShop}/admin/api/${SHOPIFY_ADMIN_API_VERSION}/graphql.json`;
+  const mutation = `
+    mutation BundleCartUsageCharge(
+      $description: String!
+      $price: MoneyInput!
+      $subscriptionLineItemId: ID!
+    ) {
+      appUsageRecordCreate(
+        description: $description
+        price: $price
+        subscriptionLineItemId: $subscriptionLineItemId
+      ) {
+        appUsageRecord {
+          id
+        }
+        userErrors {
+          field
+          message
+        }
+      }
+    }
+  `;
+  const variables = {
+    description: `BundleCart network shipping fee | bundle_id=${bundleId} | order_id=${orderId}`,
+    price: {
+      amount: Number(amount || 0),
+      currencyCode: "USD"
+    },
+    subscriptionLineItemId
+  };
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "X-Shopify-Access-Token": token
+    },
+    body: JSON.stringify({ query: mutation, variables })
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`usage_charge_create_failed_${response.status}:${body}`);
+  }
+
+  const payload = await response.json();
+  if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
+    throw new Error(`usage_charge_create_graphql_error:${JSON.stringify(payload.errors)}`);
+  }
+
+  const userErrors = payload?.data?.appUsageRecordCreate?.userErrors;
+  if (Array.isArray(userErrors) && userErrors.length > 0) {
+    throw new Error(`usage_charge_user_error:${JSON.stringify(userErrors)}`);
+  }
+
+  const usageChargeId = payload?.data?.appUsageRecordCreate?.appUsageRecord?.id;
+  if (!usageChargeId) {
+    throw new Error("usage_charge_missing_id");
+  }
+
+  console.log("BUNDLECART USAGE CHARGE REQUEST", normalizedShop, bundleId, orderId, amount);
+  return String(usageChargeId);
+}
+
+async function processBundlecartMerchantBilling({
+  shopDomain,
+  bundleId,
+  orderId,
+  amount
+}) {
+  if (!dbPool) {
+    return;
+  }
+
+  const normalizedShop = normalizeShopDomain(shopDomain);
+  if (!normalizedShop || !bundleId || !orderId) {
+    return;
+  }
+
+  console.log("BUNDLECART MERCHANT BILLING START", normalizedShop, bundleId, orderId);
+
+  const pendingResult = await dbPool.query(INSERT_BUNDLECART_BILLING_PENDING_SQL, [
+    normalizedShop,
+    bundleId,
+    orderId,
+    amount
+  ]);
+
+  if (pendingResult.rowCount === 0) {
+    console.log("BUNDLECART BILLING SKIPPED DUPLICATE", normalizedShop, bundleId, orderId);
+    return;
+  }
+
+  const billingRecordId = pendingResult.rows[0].id;
+
+  try {
+    const merchantResult = await dbPool.query(SELECT_MERCHANT_ACCESS_TOKEN_SQL, [normalizedShop]);
+    const accessToken = String(merchantResult.rows[0]?.access_token || "").trim();
+    if (!accessToken) {
+      throw new Error("missing_merchant_access_token");
+    }
+
+    const usageChargeId = await createBundlecartUsageCharge({
+      shopDomain: normalizedShop,
+      accessToken,
+      bundleId,
+      orderId,
+      amount
+    });
+
+    await dbPool.query(UPDATE_BUNDLECART_BILLING_SUCCESS_SQL, [billingRecordId, usageChargeId]);
+    console.log("BUNDLECART MERCHANT BILLED 5 USD", normalizedShop, bundleId, orderId, usageChargeId);
+  } catch (error) {
+    await dbPool.query(UPDATE_BUNDLECART_BILLING_FAILED_SQL, [billingRecordId]);
+    console.error("BUNDLECART BILLING FAILED", normalizedShop, bundleId, orderId, error);
+  }
 }
 
 async function registerBundleCartCarrierService({ shopDomain, accessToken }) {
@@ -1234,6 +1505,7 @@ export async function ensureLinkingTablesExist() {
     await dbPool.query(ALTER_LINKED_ORDERS_ADD_EMAIL_SQL);
     await dbPool.query(ALTER_LINKED_ORDERS_ADD_BUNDLECART_SELECTED_SQL);
     await dbPool.query(ALTER_LINKED_ORDERS_ADD_BUNDLECART_PAID_SQL);
+    await dbPool.query(ALTER_LINKED_ORDERS_ADD_BUNDLECART_FEE_AMOUNT_SQL);
     await dbPool.query(ALTER_LINKED_ORDERS_ADD_ADDRESS_HASH_SQL);
     await dbPool.query(ALTER_LINKED_ORDERS_ADD_CREATED_AT_SQL);
     await dbPool.query(ALTER_LINKED_ORDERS_ADD_INSERTED_AT_SQL);
@@ -1242,6 +1514,26 @@ export async function ensureLinkingTablesExist() {
     console.log("DB SCHEMA OK linked_orders");
   } catch (error) {
     console.error("MIGRATION ERROR linked_orders", error);
+  }
+}
+
+export async function ensureBillingTablesExist() {
+  if (!dbPool) {
+    console.warn("DATABASE_URL not set; bundlecart billing persistence disabled.");
+    return;
+  }
+
+  console.log("MIGRATION START bundlecart_billing");
+  try {
+    await dbPool.query(CREATE_BUNDLECART_BILLING_TABLE_SQL);
+    await dbPool.query(CREATE_BUNDLECART_BILLING_UNIQUE_INDEX_SQL);
+    console.log("MIGRATION DONE bundlecart_billing");
+    console.log("DB SCHEMA OK bundlecart_billing");
+  } catch (error) {
+    console.error("MIGRATION ERROR bundlecart_billing", error);
+    if (isFatalDbError(error)) {
+      throw error;
+    }
   }
 }
 
@@ -1270,9 +1562,26 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
   console.log("BUNDLECART WEBHOOK CANONICAL ADDRESS", canonicalAddress);
   const bundleCartSelection = extractBundleCartSelection(order);
   const bundlecartSelected = bundleCartSelection.selected;
+  const bundlecartFeeAmount = Number(bundleCartSelection.amount || 0);
+  const orderCurrency = normalizeCurrencyCode(order.currency || "USD");
+  const customerFeeConfirmed = isBundleCartPaidFiveUsd({
+    amount: bundlecartFeeAmount,
+    currency: orderCurrency
+  });
   console.log("BUNDLECART WEBHOOK EMAIL", email || "");
   console.log("BUNDLECART WEBHOOK ADDRESS INPUT", JSON.stringify(shippingAddress || {}));
   console.log("BUNDLECART WEBHOOK ADDRESS HASH", addressHash || "");
+  if (bundlecartSelected) {
+    console.log("BUNDLECART ORDER DETECTED", {
+      orderId,
+      shopDomain: normalizedShopDomain,
+      bundlecart_fee_amount: bundlecartFeeAmount,
+      currency: orderCurrency
+    });
+    if (customerFeeConfirmed) {
+      console.log("BUNDLECART CUSTOMER FEE CONFIRMED", orderId, bundlecartFeeAmount, orderCurrency);
+    }
+  }
   let bundleStartedEmailGroupId = null;
   let bundleOrderAddedEmailGroupId = null;
 
@@ -1345,15 +1654,29 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
           email || null,
           true,
           !existingWindowFound,
+          bundlecartFeeAmount,
           addressHash,
           createdAt
         ]);
         if (linkedOrderInsertResult.rowCount > 0) {
           console.log("LINKED_ORDER INSERTED", orderId, groupId);
+          console.log("BUNDLECART BUNDLE LINKED", orderId, groupId);
           if (existingWindowFound) {
             bundleOrderAddedEmailGroupId = groupId;
           } else {
             bundleStartedEmailGroupId = groupId;
+            if (customerFeeConfirmed) {
+              try {
+                await processBundlecartMerchantBilling({
+                  shopDomain: normalizedShopDomain,
+                  bundleId: groupId,
+                  orderId,
+                  amount: 5
+                });
+              } catch (billingError) {
+                console.error("BUNDLECART BILLING FAILED", normalizedShopDomain, groupId, orderId, billingError);
+              }
+            }
           }
         } else {
           console.log("LINKED_ORDER DUPLICATE", orderId);
@@ -1387,6 +1710,7 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
         email,
         false,
         false,
+        0,
         addressHash || null,
         createdAt
       ]);
@@ -1505,6 +1829,7 @@ export function createApp() {
 
   app.post("/api/shipping/rates", express.text({ type: "*/*" }), (req, res) => {
     const fallbackPaid = () => {
+      console.log("BUNDLECART RATE RETURNED 5 USD");
       return res.status(200).json(
         buildBundleCartRateResponse({ eligibleFree: false, currency: "USD" })
       );
@@ -1555,6 +1880,7 @@ export function createApp() {
 
         if (!addressHash || !dbPool) {
           console.log("BUNDLECART NETWORK FIRST ORDER FEE 5");
+          console.log("BUNDLECART RATE RETURNED 5 USD");
           return res
             .status(200)
             .json(buildBundleCartRateResponse({ eligibleFree: false, currency }));
@@ -1583,6 +1909,7 @@ export function createApp() {
         }
 
         console.log("BUNDLECART NETWORK FIRST ORDER FEE 5");
+        console.log("BUNDLECART RATE RETURNED 5 USD");
         return res
           .status(200)
           .json(buildBundleCartRateResponse({ eligibleFree: false, currency }));
@@ -1943,6 +2270,7 @@ const isDirectRun =
 if (isDirectRun && process.env.NODE_ENV !== "test") {
   ensureOrdersTableExists()
     .then(() => ensureLinkingTablesExist())
+    .then(() => ensureBillingTablesExist())
     .catch((error) => {
       console.error("Failed to ensure shopify_orders table", error?.message || error);
     })
