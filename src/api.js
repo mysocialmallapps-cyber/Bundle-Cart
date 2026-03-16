@@ -60,6 +60,8 @@ export const api = {
   deleteBundle: (bundleId) => request(`/bundles/${bundleId}`, { method: "DELETE" }),
   getOrders: (signal) => request("/orders?crossStoreWindowHours=24", { signal }),
   getCustomerInsights: (signal) => request("/customers/insights", { signal }),
+  getMerchantDashboard: (shop) =>
+    request(`/merchant/dashboard?shop=${encodeURIComponent(String(shop || "").trim())}`),
   getAdminBundles: () => requestDashboard("/admin/bundles"),
   getAdminReadyBundles: () => requestDashboard("/admin/bundles/ready"),
   getAdminBundleDetail: (bundleId) => requestDashboard(`/admin/bundles/${bundleId}`)

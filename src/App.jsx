@@ -1,17 +1,31 @@
-import { NavLink, Navigate, Route, Routes } from "react-router-dom";
+import { NavLink, Navigate, Route, Routes, useLocation, useSearchParams } from "react-router-dom";
 import BundlesPage from "./pages/BundlesPage";
 import AdminBundleDetailPage from "./pages/AdminBundleDetailPage";
-
-const NAV_ITEMS = [{ to: "/admin/bundles", label: "Bundles" }];
+import MerchantDashboardPage from "./pages/MerchantDashboardPage";
 
 export default function App() {
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const shop = String(searchParams.get("shop") || "")
+    .trim()
+    .toLowerCase();
+  const isMerchantDashboard = location.pathname === "/dashboard";
+  const navItems = isMerchantDashboard
+    ? [
+        {
+          to: shop ? `/dashboard?shop=${encodeURIComponent(shop)}` : "/dashboard",
+          label: "Dashboard"
+        }
+      ]
+    : [{ to: "/admin/bundles", label: "Bundles" }];
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <h1 className="brand">BundleCart</h1>
-        <p className="brand-subtitle">Admin MVP</p>
+        <p className="brand-subtitle">{isMerchantDashboard ? "Merchant View" : "Admin MVP"}</p>
         <nav className="nav">
-          {NAV_ITEMS.map((item) => (
+          {navItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
@@ -25,13 +39,18 @@ export default function App() {
 
       <main className="main">
         <header className="topbar">
-          <h2>Bundle Network Operations</h2>
-          <p>Monitor active bundle windows, first-order fees, and linked free orders.</p>
+          <h2>{isMerchantDashboard ? "BundleCart Store Metrics" : "Bundle Network Operations"}</h2>
+          <p>
+            {isMerchantDashboard
+              ? "Track bundles, incremental orders, and BundleCart network performance."
+              : "Monitor active bundle windows, first-order fees, and linked free orders."}
+          </p>
         </header>
 
         <section className="page-content">
           <Routes>
             <Route path="/" element={<Navigate to="/admin/bundles" replace />} />
+            <Route path="/dashboard" element={<MerchantDashboardPage />} />
             <Route path="/admin" element={<Navigate to="/admin/bundles" replace />} />
             <Route path="/admin/dashboard" element={<Navigate to="/admin/bundles" replace />} />
             <Route path="/admin/bundles" element={<BundlesPage />} />

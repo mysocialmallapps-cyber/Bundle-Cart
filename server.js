@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS link_groups (
   address_hash TEXT,
   bundlecart_paid_at TIMESTAMP,
   first_paid_order_id BIGINT,
+  first_shop_domain TEXT,
   customer_address_json JSONB,
   reminder_email_sent BOOLEAN DEFAULT FALSE,
   expired_email_sent BOOLEAN DEFAULT FALSE
@@ -359,7 +360,8 @@ SET last_seen_at = NOW(),
     bundlecart_paid_at = $2::timestamp,
     active_until = ($2::timestamp + INTERVAL '72 hours'),
     address_hash = $3::text,
-    first_paid_order_id = $4::bigint
+    first_paid_order_id = $4::bigint,
+    first_shop_domain = COALESCE($5::text, first_shop_domain)
 WHERE id = $1::integer;
 `;
 
@@ -478,6 +480,57 @@ GROUP BY lg.id
 LIMIT 1;
 `;
 
+const SELECT_MERCHANT_DASHBOARD_METRICS_SQL = `
+WITH bundles_created AS (
+  SELECT COUNT(*)::integer AS value
+  FROM link_groups lg
+  WHERE lg.first_shop_domain = $1::text
+),
+orders_bundled AS (
+  SELECT COUNT(*)::integer AS value
+  FROM linked_orders lo
+  WHERE lo.shop_domain = $1::text
+),
+network_orders AS (
+  SELECT COUNT(*)::integer AS value
+  FROM linked_orders lo
+  JOIN link_groups lg ON lg.id = lo.group_id
+  WHERE lo.shop_domain = $1::text
+    AND lg.first_shop_domain IS NOT NULL
+    AND lg.first_shop_domain <> $1::text
+),
+orders_in_bundles_created AS (
+  SELECT COUNT(lo.id)::integer AS value
+  FROM link_groups lg
+  LEFT JOIN linked_orders lo ON lo.group_id = lg.id
+  WHERE lg.first_shop_domain = $1::text
+),
+fees_collected AS (
+  SELECT COALESCE(SUM(lo.bundlecart_fee_amount), 0)::numeric AS value
+  FROM link_groups lg
+  JOIN linked_orders lo ON lo.group_id = lg.id
+  WHERE lg.first_shop_domain = $1::text
+    AND lo.shop_domain = $1::text
+    AND lo.bundlecart_paid = TRUE
+    AND lo.shopify_order_id = lg.first_paid_order_id
+)
+SELECT
+  bc.value AS bundles_created,
+  ob.value AS orders_bundled,
+  GREATEST(ob.value - bc.value, 0) AS extra_orders_generated,
+  no.value AS network_orders,
+  CASE
+    WHEN bc.value = 0 THEN 0::numeric
+    ELSE ROUND((oic.value::numeric / bc.value::numeric), 2)
+  END AS avg_orders_per_bundle,
+  fc.value AS bundlecart_fees_collected
+FROM bundles_created bc
+CROSS JOIN orders_bundled ob
+CROSS JOIN network_orders no
+CROSS JOIN orders_in_bundles_created oic
+CROSS JOIN fees_collected fc;
+`;
+
 const SELECT_BUNDLES_FOR_REMINDER_EMAIL_SQL = `
 SELECT id, email, active_until
 FROM link_groups
@@ -509,6 +562,23 @@ const UPDATE_LINK_GROUP_EXPIRED_EMAIL_SENT_SQL = `
 UPDATE link_groups
 SET expired_email_sent = TRUE
 WHERE id = $1::integer;
+`;
+
+const BACKFILL_LINK_GROUPS_FIRST_SHOP_DOMAIN_SQL = `
+WITH first_paid_order AS (
+  SELECT DISTINCT ON (lo.group_id)
+    lo.group_id,
+    lo.shop_domain
+  FROM linked_orders lo
+  WHERE lo.group_id IS NOT NULL
+    AND lo.bundlecart_paid = TRUE
+  ORDER BY lo.group_id, lo.created_at ASC NULLS LAST, lo.inserted_at ASC NULLS LAST, lo.id ASC
+)
+UPDATE link_groups lg
+SET first_shop_domain = fpo.shop_domain
+FROM first_paid_order fpo
+WHERE lg.id = fpo.group_id
+  AND lg.first_shop_domain IS NULL;
 `;
 
 const ALTER_MERCHANTS_ADD_DOMAIN_SQL = `
@@ -580,6 +650,10 @@ ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS bundlecart_paid_at TIMESTAMP;
 
 const ALTER_LINK_GROUPS_ADD_FIRST_PAID_ORDER_ID_SQL = `
 ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS first_paid_order_id BIGINT;
+`;
+
+const ALTER_LINK_GROUPS_ADD_FIRST_SHOP_DOMAIN_SQL = `
+ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS first_shop_domain TEXT;
 `;
 
 const ALTER_LINK_GROUPS_ADD_CUSTOMER_ADDRESS_JSON_SQL = `
@@ -2542,9 +2616,11 @@ export async function ensureLinkingTablesExist() {
     await dbPool.query(ALTER_LINK_GROUPS_ADD_ADDRESS_HASH_SQL);
     await dbPool.query(ALTER_LINK_GROUPS_ADD_BUNDLECART_PAID_AT_SQL);
     await dbPool.query(ALTER_LINK_GROUPS_ADD_FIRST_PAID_ORDER_ID_SQL);
+    await dbPool.query(ALTER_LINK_GROUPS_ADD_FIRST_SHOP_DOMAIN_SQL);
     await dbPool.query(ALTER_LINK_GROUPS_ADD_CUSTOMER_ADDRESS_JSON_SQL);
     await dbPool.query(ALTER_LINK_GROUPS_ADD_REMINDER_EMAIL_SENT_SQL);
     await dbPool.query(ALTER_LINK_GROUPS_ADD_EXPIRED_EMAIL_SENT_SQL);
+    await dbPool.query(BACKFILL_LINK_GROUPS_FIRST_SHOP_DOMAIN_SQL);
     await dbPool.query(CREATE_LINK_GROUPS_INDEX_SQL);
     console.log("MIGRATION DONE link_groups");
     console.log("DB SCHEMA OK link_groups");
@@ -2727,7 +2803,8 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
           groupId,
           paidAtTimestamp,
           addressHash,
-          orderId
+          orderId,
+          normalizedShopDomain
         ]);
         await dbPool.query(UPDATE_LINK_GROUP_METADATA_SQL, [
           groupId,
@@ -3215,6 +3292,57 @@ export function createApp() {
 
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true, time: new Date().toISOString() });
+  });
+
+  app.get("/api/merchant/dashboard", async (req, res) => {
+    const shop = normalizeShopDomain(req.query.shop);
+    if (!shop) {
+      res.status(400).json({ ok: false, message: "Missing shop" });
+      return;
+    }
+
+    if (!dbPool) {
+      res.status(503).json({ ok: false, message: "Database unavailable" });
+      return;
+    }
+
+    try {
+      const merchantResult = await dbPool.query(SELECT_MERCHANT_ACCESS_TOKEN_SQL, [shop]);
+      const accessToken = String(merchantResult.rows[0]?.access_token || "").trim();
+      if (!accessToken) {
+        res.status(401).json({ ok: false, message: "Merchant auth required" });
+        return;
+      }
+
+      const billingAccess = await ensureMerchantBillingSubscription({
+        shopDomain: shop,
+        accessToken,
+        createIfMissing: true
+      });
+
+      if (!billingAccess?.active) {
+        res.status(402).json({
+          ok: false,
+          message: "Active subscription required",
+          approval_url: billingAccess?.confirmationUrl || null
+        });
+        return;
+      }
+
+      const result = await dbPool.query(SELECT_MERCHANT_DASHBOARD_METRICS_SQL, [shop]);
+      const row = result.rows[0] || {};
+      res.json({
+        bundles_created: Number(row.bundles_created || 0),
+        orders_bundled: Number(row.orders_bundled || 0),
+        extra_orders_generated: Number(row.extra_orders_generated || 0),
+        network_orders: Number(row.network_orders || 0),
+        avg_orders_per_bundle: Number(row.avg_orders_per_bundle || 0),
+        bundlecart_fees_collected: Number(row.bundlecart_fees_collected || 0)
+      });
+    } catch (error) {
+      console.error("MERCHANT DASHBOARD FETCH ERROR", shop, error);
+      res.status(500).json({ ok: false, message: "Dashboard fetch failed" });
+    }
   });
 
   app.get("/api/admin/bundles", async (req, res) => {
