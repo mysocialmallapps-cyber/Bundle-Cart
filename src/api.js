@@ -62,6 +62,7 @@ export const api = {
   getCustomerInsights: (signal) => request("/customers/insights", { signal }),
   getMerchantDashboard: (shop) =>
     request(`/merchant/dashboard?shop=${encodeURIComponent(String(shop || "").trim())}`),
+  getPublicBundle: (token) => request(`/bundle/${encodeURIComponent(String(token || "").trim())}`),
   getAdminBundles: () => requestDashboard("/admin/bundles"),
   getAdminReadyBundles: () => requestDashboard("/admin/bundles/ready"),
   getAdminBundleDetail: (bundleId) => requestDashboard(`/admin/bundles/${bundleId}`)

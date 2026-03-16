@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS link_groups (
   bundlecart_paid_at TIMESTAMP,
   first_paid_order_id BIGINT,
   first_shop_domain TEXT,
+  bundle_public_token TEXT UNIQUE,
   customer_address_json JSONB,
   reminder_email_sent BOOLEAN DEFAULT FALSE,
   expired_email_sent BOOLEAN DEFAULT FALSE
@@ -471,6 +472,7 @@ SELECT
   lg.id AS bundle_id,
   lg.email AS customer_email,
   lg.active_until,
+  lg.bundle_public_token,
   COUNT(lo.id)::integer AS order_count
 FROM link_groups lg
 LEFT JOIN linked_orders lo
@@ -478,6 +480,20 @@ LEFT JOIN linked_orders lo
 WHERE lg.id = $1::integer
 GROUP BY lg.id
 LIMIT 1;
+`;
+
+const SELECT_LINK_GROUP_BY_TOKEN_SQL = `
+SELECT
+  lg.id,
+  lg.active_until,
+  lg.first_shop_domain,
+  lo.shopify_order_id AS order_id,
+  lo.shop_domain
+FROM link_groups lg
+LEFT JOIN linked_orders lo
+  ON lo.group_id = lg.id
+WHERE lg.bundle_public_token = $1::text
+ORDER BY lo.created_at ASC NULLS LAST, lo.inserted_at ASC NULLS LAST;
 `;
 
 const SELECT_MERCHANT_DASHBOARD_METRICS_SQL = `
@@ -562,6 +578,20 @@ const UPDATE_LINK_GROUP_EXPIRED_EMAIL_SENT_SQL = `
 UPDATE link_groups
 SET expired_email_sent = TRUE
 WHERE id = $1::integer;
+`;
+
+const SELECT_LINK_GROUP_PUBLIC_TOKEN_SQL = `
+SELECT bundle_public_token
+FROM link_groups
+WHERE id = $1::integer
+LIMIT 1;
+`;
+
+const UPSERT_LINK_GROUP_PUBLIC_TOKEN_SQL = `
+UPDATE link_groups
+SET bundle_public_token = COALESCE(bundle_public_token, $2::text)
+WHERE id = $1::integer
+RETURNING bundle_public_token;
 `;
 
 const BACKFILL_LINK_GROUPS_FIRST_SHOP_DOMAIN_SQL = `
@@ -666,6 +696,16 @@ ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS reminder_email_sent BOOLEAN DEF
 
 const ALTER_LINK_GROUPS_ADD_EXPIRED_EMAIL_SENT_SQL = `
 ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS expired_email_sent BOOLEAN DEFAULT FALSE;
+`;
+
+const ALTER_LINK_GROUPS_ADD_BUNDLE_PUBLIC_TOKEN_SQL = `
+ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS bundle_public_token TEXT;
+`;
+
+const CREATE_LINK_GROUPS_BUNDLE_PUBLIC_TOKEN_UNIQUE_INDEX_SQL = `
+CREATE UNIQUE INDEX IF NOT EXISTS link_groups_bundle_public_token_uq
+ON link_groups (bundle_public_token)
+WHERE bundle_public_token IS NOT NULL;
 `;
 
 const ALTER_LINKED_ORDERS_ADD_GROUP_ID_SQL = `
@@ -1099,6 +1139,52 @@ function buildBundlecartBillingIdempotencyKey({ shopDomain, bundleId, orderId, a
   return crypto.createHash("sha256").update(keySource).digest("hex");
 }
 
+function generateBundlePublicToken() {
+  return crypto.randomBytes(24).toString("hex");
+}
+
+async function ensureBundlePublicTokenForGroup(bundleId) {
+  if (!dbPool || !bundleId) {
+    return "";
+  }
+
+  const existingResult = await dbPool.query(SELECT_LINK_GROUP_PUBLIC_TOKEN_SQL, [bundleId]);
+  const existingToken = String(existingResult.rows[0]?.bundle_public_token || "").trim();
+  if (existingToken) {
+    return existingToken;
+  }
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const candidateToken = generateBundlePublicToken();
+    try {
+      const updateResult = await dbPool.query(UPSERT_LINK_GROUP_PUBLIC_TOKEN_SQL, [
+        bundleId,
+        candidateToken
+      ]);
+      const token = String(updateResult.rows[0]?.bundle_public_token || "").trim();
+      if (token) {
+        return token;
+      }
+    } catch (error) {
+      if (String(error?.code || "") === "23505") {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw new Error("bundle_public_token_generation_failed");
+}
+
+function buildPublicBundleUrl(token) {
+  const publicToken = String(token || "").trim();
+  if (!publicToken) {
+    return "";
+  }
+  const appUrl = String(process.env.APP_URL || "https://bundle-cart.replit.app").replace(/\/+$/, "");
+  return `${appUrl}/bundle/${encodeURIComponent(publicToken)}`;
+}
+
 function toBillingFailureReason(errorOrReason) {
   const raw =
     typeof errorOrReason === "string"
@@ -1246,13 +1332,18 @@ async function sendBundleStartedEmailNotification(bundleId, fallbackEmail) {
     const recipient = String(summary?.customer_email || fallbackEmail || "").trim().toLowerCase();
     const orderCount = Number(summary?.order_count || 0);
     const expiry = formatBundleExpiryForEmail(summary?.active_until);
+    const bundleToken =
+      String(summary?.bundle_public_token || "").trim() ||
+      (await ensureBundlePublicTokenForGroup(bundleId));
+    const bundleUrl = buildPublicBundleUrl(bundleToken);
     const subject = "Your BundleCart shipping window is open";
     const text = [
       "You can place additional orders in the next 72 hours and ship them together with BundleCart.",
       "",
       `Bundle ID: ${bundleId}`,
       `Bundle expires: ${expiry}`,
-      `Current order count: ${orderCount}`
+      `Current order count: ${orderCount}`,
+      ...(bundleUrl ? ["", "View your BundleCart window", bundleUrl] : [])
     ].join("\n");
     await sendBundleCartEmail({ to: recipient, subject, text });
     console.log("BUNDLECART EMAIL BUNDLE STARTED", bundleId, recipient);
@@ -1267,13 +1358,18 @@ async function sendBundleOrderAddedEmailNotification(bundleId, fallbackEmail) {
     const recipient = String(summary?.customer_email || fallbackEmail || "").trim().toLowerCase();
     const orderCount = Number(summary?.order_count || 0);
     const expiry = formatBundleExpiryForEmail(summary?.active_until);
+    const bundleToken =
+      String(summary?.bundle_public_token || "").trim() ||
+      (await ensureBundlePublicTokenForGroup(bundleId));
+    const bundleUrl = buildPublicBundleUrl(bundleToken);
     const subject = "A new order was added to your BundleCart bundle";
     const text = [
       "Another order was added to your active BundleCart bundle.",
       "",
       `Bundle ID: ${bundleId}`,
       `Updated order count: ${orderCount}`,
-      `Bundle expires: ${expiry}`
+      `Bundle expires: ${expiry}`,
+      ...(bundleUrl ? ["", "View your BundleCart window", bundleUrl] : [])
     ].join("\n");
     await sendBundleCartEmail({ to: recipient, subject, text });
     console.log("BUNDLECART EMAIL ORDER ADDED", bundleId, recipient);
@@ -1293,12 +1389,20 @@ async function sendBundleReminderEmail(bundle) {
   }
 
   const subject = "Your BundleCart window closes soon";
+  let bundleUrl = "";
+  try {
+    const bundleToken = await ensureBundlePublicTokenForGroup(bundleId);
+    bundleUrl = buildPublicBundleUrl(bundleToken);
+  } catch (error) {
+    console.error("BUNDLECART EMAIL BUNDLE REMINDER ERROR", bundleId, error);
+  }
   const text = [
     "Your BundleCart window is still open.",
     "",
     "Add another order before it closes and it will ship free with your bundle.",
     "",
-    "Time remaining: less than 24 hours."
+    "Time remaining: less than 24 hours.",
+    ...(bundleUrl ? ["", "View your BundleCart window", bundleUrl] : [])
   ].join("\n");
 
   try {
@@ -2617,10 +2721,12 @@ export async function ensureLinkingTablesExist() {
     await dbPool.query(ALTER_LINK_GROUPS_ADD_BUNDLECART_PAID_AT_SQL);
     await dbPool.query(ALTER_LINK_GROUPS_ADD_FIRST_PAID_ORDER_ID_SQL);
     await dbPool.query(ALTER_LINK_GROUPS_ADD_FIRST_SHOP_DOMAIN_SQL);
+    await dbPool.query(ALTER_LINK_GROUPS_ADD_BUNDLE_PUBLIC_TOKEN_SQL);
     await dbPool.query(ALTER_LINK_GROUPS_ADD_CUSTOMER_ADDRESS_JSON_SQL);
     await dbPool.query(ALTER_LINK_GROUPS_ADD_REMINDER_EMAIL_SENT_SQL);
     await dbPool.query(ALTER_LINK_GROUPS_ADD_EXPIRED_EMAIL_SENT_SQL);
     await dbPool.query(BACKFILL_LINK_GROUPS_FIRST_SHOP_DOMAIN_SQL);
+    await dbPool.query(CREATE_LINK_GROUPS_BUNDLE_PUBLIC_TOKEN_UNIQUE_INDEX_SQL);
     await dbPool.query(CREATE_LINK_GROUPS_INDEX_SQL);
     console.log("MIGRATION DONE link_groups");
     console.log("DB SCHEMA OK link_groups");
@@ -2797,6 +2903,7 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
         console.log("DB STEP link_groups insert");
         const createGroupResult = await dbPool.query(INSERT_LINK_GROUP_SQL, [email || ""]);
         groupId = createGroupResult.rows[0].id;
+        await ensureBundlePublicTokenForGroup(groupId);
         console.log("BUNDLECART NEW BUNDLE WINDOW CREATED", groupId);
         console.log("BUNDLECART NETWORK FIRST ORDER FEE 5");
         await dbPool.query(START_BUNDLECART_WINDOW_SQL, [
@@ -3292,6 +3399,43 @@ export function createApp() {
 
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true, time: new Date().toISOString() });
+  });
+
+  app.get("/api/bundle/:token", async (req, res) => {
+    const token = String(req.params.token || "").trim();
+    if (!token) {
+      res.status(400).json({ ok: false, message: "Missing token" });
+      return;
+    }
+    if (!dbPool) {
+      res.status(503).json({ ok: false, message: "Database unavailable" });
+      return;
+    }
+
+    try {
+      const result = await dbPool.query(SELECT_LINK_GROUP_BY_TOKEN_SQL, [token]);
+      if (result.rowCount === 0) {
+        res.status(404).json({ ok: false, message: "Bundle not found" });
+        return;
+      }
+
+      const firstRow = result.rows[0];
+      const orders = result.rows
+        .filter((row) => row.order_id != null)
+        .map((row) => ({
+          order_id: String(row.order_id),
+          shop: String(row.shop_domain || "")
+        }));
+
+      res.json({
+        bundle_id: Number(firstRow.id),
+        active_until: firstRow.active_until,
+        orders
+      });
+    } catch (error) {
+      console.error("BUNDLE PUBLIC API ERROR", error);
+      res.status(500).json({ ok: false });
+    }
   });
 
   app.get("/api/merchant/dashboard", async (req, res) => {

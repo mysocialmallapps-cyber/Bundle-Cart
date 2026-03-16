@@ -2,6 +2,7 @@ import { NavLink, Navigate, Route, Routes, useLocation, useSearchParams } from "
 import BundlesPage from "./pages/BundlesPage";
 import AdminBundleDetailPage from "./pages/AdminBundleDetailPage";
 import MerchantDashboardPage from "./pages/MerchantDashboardPage";
+import PublicBundlePage from "./pages/PublicBundlePage";
 
 export default function App() {
   const location = useLocation();
@@ -10,6 +11,7 @@ export default function App() {
     .trim()
     .toLowerCase();
   const isMerchantDashboard = location.pathname === "/dashboard";
+  const isPublicBundlePage = location.pathname.startsWith("/bundle/");
   const navItems = isMerchantDashboard
     ? [
         {
@@ -18,6 +20,18 @@ export default function App() {
         }
       ]
     : [{ to: "/admin/bundles", label: "Bundles" }];
+
+  if (isPublicBundlePage) {
+    return (
+      <main className="main">
+        <section className="page-content">
+          <Routes>
+            <Route path="/bundle/:token" element={<PublicBundlePage />} />
+          </Routes>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <div className="app-shell">
