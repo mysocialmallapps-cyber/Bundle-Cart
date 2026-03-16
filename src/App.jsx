@@ -3,6 +3,7 @@ import BundlesPage from "./pages/BundlesPage";
 import AdminBundleDetailPage from "./pages/AdminBundleDetailPage";
 import MerchantDashboardPage from "./pages/MerchantDashboardPage";
 import PublicBundlePage from "./pages/PublicBundlePage";
+import MarketingPage from "./pages/MarketingPage";
 
 export default function App() {
   const location = useLocation();
@@ -12,6 +13,7 @@ export default function App() {
     .toLowerCase();
   const isMerchantDashboard = location.pathname === "/dashboard";
   const isPublicBundlePage = location.pathname.startsWith("/bundle/");
+  const isMarketingPage = location.pathname === "/marketing";
   const navItems = isMerchantDashboard
     ? [
         {
@@ -21,12 +23,13 @@ export default function App() {
       ]
     : [{ to: "/admin/bundles", label: "Bundles" }];
 
-  if (isPublicBundlePage) {
+  if (isPublicBundlePage || isMarketingPage) {
     return (
       <main className="main">
         <section className="page-content">
           <Routes>
             <Route path="/bundle/:token" element={<PublicBundlePage />} />
+            <Route path="/marketing" element={<MarketingPage />} />
           </Routes>
         </section>
       </main>
