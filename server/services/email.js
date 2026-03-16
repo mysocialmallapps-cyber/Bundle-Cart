@@ -8,7 +8,7 @@ const EMAIL_PROVIDER = String(
 const RESEND_API_KEY = String(
   process.env.RESEND_API_KEY || process.env.BUNDLECART_EMAIL_API_KEY || ""
 ).trim();
-const EMAIL_FROM = String(process.env.EMAIL_FROM || process.env.BUNDLECART_EMAIL_FROM || "").trim();
+const EMAIL_FROM = process.env.EMAIL_FROM || "BundleCart <noreply@mail.bundlecart.app>";
 
 let resendClient = null;
 let providerConfiguredLogged = false;
