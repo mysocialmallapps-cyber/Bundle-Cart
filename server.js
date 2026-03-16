@@ -27,6 +27,8 @@ const BUNDLECART_FREE_RATE = {
   description:
     "Your active BundleCart window is open. Linked orders in the next 72 hours ship free together."
 };
+const BUNDLECART_EMAIL_WORKER_INTERVAL_MS = 10 * 60 * 1000;
+const BUNDLECART_EMAIL_WORKER_BATCH_LIMIT = 100;
 const SHOPIFY_BILLING_MODE = String(process.env.SHOPIFY_BILLING_MODE || "manual")
   .trim()
   .toLowerCase();
@@ -98,7 +100,9 @@ CREATE TABLE IF NOT EXISTS link_groups (
   address_hash TEXT,
   bundlecart_paid_at TIMESTAMP,
   first_paid_order_id BIGINT,
-  customer_address_json JSONB
+  customer_address_json JSONB,
+  reminder_email_sent BOOLEAN DEFAULT FALSE,
+  expired_email_sent BOOLEAN DEFAULT FALSE
 );
 `;
 
@@ -474,6 +478,39 @@ GROUP BY lg.id
 LIMIT 1;
 `;
 
+const SELECT_BUNDLES_FOR_REMINDER_EMAIL_SQL = `
+SELECT id, email, active_until
+FROM link_groups
+WHERE active_until IS NOT NULL
+  AND active_until > NOW()
+  AND active_until <= NOW() + INTERVAL '24 hours'
+  AND COALESCE(reminder_email_sent, FALSE) = FALSE
+ORDER BY active_until ASC
+LIMIT $1::integer;
+`;
+
+const SELECT_BUNDLES_FOR_EXPIRED_EMAIL_SQL = `
+SELECT id, email, active_until
+FROM link_groups
+WHERE active_until IS NOT NULL
+  AND active_until <= NOW()
+  AND COALESCE(expired_email_sent, FALSE) = FALSE
+ORDER BY active_until ASC
+LIMIT $1::integer;
+`;
+
+const UPDATE_LINK_GROUP_REMINDER_EMAIL_SENT_SQL = `
+UPDATE link_groups
+SET reminder_email_sent = TRUE
+WHERE id = $1::integer;
+`;
+
+const UPDATE_LINK_GROUP_EXPIRED_EMAIL_SENT_SQL = `
+UPDATE link_groups
+SET expired_email_sent = TRUE
+WHERE id = $1::integer;
+`;
+
 const ALTER_MERCHANTS_ADD_DOMAIN_SQL = `
 ALTER TABLE merchants ADD COLUMN IF NOT EXISTS domain TEXT;
 `;
@@ -547,6 +584,14 @@ ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS first_paid_order_id BIGINT;
 
 const ALTER_LINK_GROUPS_ADD_CUSTOMER_ADDRESS_JSON_SQL = `
 ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS customer_address_json JSONB;
+`;
+
+const ALTER_LINK_GROUPS_ADD_REMINDER_EMAIL_SENT_SQL = `
+ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS reminder_email_sent BOOLEAN DEFAULT FALSE;
+`;
+
+const ALTER_LINK_GROUPS_ADD_EXPIRED_EMAIL_SENT_SQL = `
+ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS expired_email_sent BOOLEAN DEFAULT FALSE;
 `;
 
 const ALTER_LINKED_ORDERS_ADD_GROUP_ID_SQL = `
@@ -1161,6 +1206,107 @@ async function sendBundleOrderAddedEmailNotification(bundleId, fallbackEmail) {
   } catch (error) {
     console.error("BUNDLECART EMAIL ORDER ADDED ERROR", bundleId, error);
   }
+}
+
+async function sendBundleReminderEmail(bundle) {
+  const bundleId = Number(bundle?.id || 0);
+  const recipient = String(bundle?.email || "").trim().toLowerCase();
+  console.log("BUNDLECART EMAIL BUNDLE REMINDER START", bundleId, recipient);
+
+  if (!recipient) {
+    console.error("BUNDLECART EMAIL BUNDLE REMINDER ERROR", bundleId, "missing_recipient");
+    return false;
+  }
+
+  const subject = "Your BundleCart window closes soon";
+  const text = [
+    "Your BundleCart window is still open.",
+    "",
+    "Add another order before it closes and it will ship free with your bundle.",
+    "",
+    "Time remaining: less than 24 hours."
+  ].join("\n");
+
+  try {
+    await sendBundleCartEmail({ to: recipient, subject, text });
+    console.log("BUNDLECART EMAIL BUNDLE REMINDER SENT", bundleId, recipient);
+    return true;
+  } catch (error) {
+    console.error("BUNDLECART EMAIL BUNDLE REMINDER ERROR", bundleId, error);
+    return false;
+  }
+}
+
+async function sendBundleExpiredEmail(bundle) {
+  const bundleId = Number(bundle?.id || 0);
+  const recipient = String(bundle?.email || "").trim().toLowerCase();
+  console.log("BUNDLECART EMAIL BUNDLE EXPIRED START", bundleId, recipient);
+
+  if (!recipient) {
+    console.error("BUNDLECART EMAIL BUNDLE EXPIRED ERROR", bundleId, "missing_recipient");
+    return false;
+  }
+
+  const subject = "Your BundleCart shipping window has closed";
+  const text = [
+    "Your BundleCart shipping window has closed.",
+    "",
+    "Your orders will now ship separately.",
+    "",
+    "You can start a new BundleCart bundle anytime on your next order."
+  ].join("\n");
+
+  try {
+    await sendBundleCartEmail({ to: recipient, subject, text });
+    console.log("BUNDLECART EMAIL BUNDLE EXPIRED SENT", bundleId, recipient);
+    return true;
+  } catch (error) {
+    console.error("BUNDLECART EMAIL BUNDLE EXPIRED ERROR", bundleId, error);
+    return false;
+  }
+}
+
+async function runBundleLifecycleEmailJobs() {
+  if (!dbPool) {
+    return;
+  }
+
+  try {
+    const reminderBundlesResult = await dbPool.query(SELECT_BUNDLES_FOR_REMINDER_EMAIL_SQL, [
+      BUNDLECART_EMAIL_WORKER_BATCH_LIMIT
+    ]);
+    for (const bundle of reminderBundlesResult.rows) {
+      const sent = await sendBundleReminderEmail(bundle);
+      if (sent) {
+        await dbPool.query(UPDATE_LINK_GROUP_REMINDER_EMAIL_SENT_SQL, [bundle.id]);
+      }
+    }
+
+    const expiredBundlesResult = await dbPool.query(SELECT_BUNDLES_FOR_EXPIRED_EMAIL_SQL, [
+      BUNDLECART_EMAIL_WORKER_BATCH_LIMIT
+    ]);
+    for (const bundle of expiredBundlesResult.rows) {
+      const sent = await sendBundleExpiredEmail(bundle);
+      if (sent) {
+        await dbPool.query(UPDATE_LINK_GROUP_EXPIRED_EMAIL_SENT_SQL, [bundle.id]);
+      }
+    }
+  } catch (error) {
+    console.error("BUNDLECART EMAIL WORKER ERROR", error);
+  }
+}
+
+let bundleLifecycleEmailWorkerStarted = false;
+function startBundleLifecycleEmailWorker() {
+  if (bundleLifecycleEmailWorkerStarted) {
+    return;
+  }
+  bundleLifecycleEmailWorkerStarted = true;
+
+  void runBundleLifecycleEmailJobs();
+  setInterval(() => {
+    void runBundleLifecycleEmailJobs();
+  }, BUNDLECART_EMAIL_WORKER_INTERVAL_MS);
 }
 
 function isBundleCartShippingLine(line) {
@@ -2397,6 +2543,8 @@ export async function ensureLinkingTablesExist() {
     await dbPool.query(ALTER_LINK_GROUPS_ADD_BUNDLECART_PAID_AT_SQL);
     await dbPool.query(ALTER_LINK_GROUPS_ADD_FIRST_PAID_ORDER_ID_SQL);
     await dbPool.query(ALTER_LINK_GROUPS_ADD_CUSTOMER_ADDRESS_JSON_SQL);
+    await dbPool.query(ALTER_LINK_GROUPS_ADD_REMINDER_EMAIL_SENT_SQL);
+    await dbPool.query(ALTER_LINK_GROUPS_ADD_EXPIRED_EMAIL_SENT_SQL);
     await dbPool.query(CREATE_LINK_GROUPS_INDEX_SQL);
     console.log("MIGRATION DONE link_groups");
     console.log("DB SCHEMA OK link_groups");
@@ -3358,6 +3506,7 @@ if (isDirectRun && process.env.NODE_ENV !== "test") {
       app.listen(PORT, "0.0.0.0", () => {
         console.log(`BundleCart server listening on port ${PORT}`);
         void registerCarrierServiceForActiveMerchants();
+        startBundleLifecycleEmailWorker();
       });
     });
 }
