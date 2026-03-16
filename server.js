@@ -3,6 +3,7 @@ import path from "node:path";
 import express from "express";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
+import { sendEmail } from "./server/services/email.js";
 
 const DIST_PATH = path.resolve("dist");
 const { Pool } = pg;
@@ -26,15 +27,6 @@ const BUNDLECART_FREE_RATE = {
   description:
     "Your active BundleCart window is open. Linked orders in the next 72 hours ship free together."
 };
-const BUNDLECART_EMAIL_PROVIDER = String(process.env.BUNDLECART_EMAIL_PROVIDER || "")
-  .trim()
-  .toLowerCase();
-const BUNDLECART_EMAIL_FROM = String(process.env.BUNDLECART_EMAIL_FROM || "").trim();
-const BUNDLECART_EMAIL_API_KEY = String(process.env.BUNDLECART_EMAIL_API_KEY || "").trim();
-const BUNDLECART_EMAIL_WEBHOOK_URL = String(process.env.BUNDLECART_EMAIL_WEBHOOK_URL || "").trim();
-const BUNDLECART_EMAIL_WEBHOOK_AUTH_TOKEN = String(
-  process.env.BUNDLECART_EMAIL_WEBHOOK_AUTH_TOKEN || ""
-).trim();
 const SHOPIFY_BILLING_MODE = String(process.env.SHOPIFY_BILLING_MODE || "manual")
   .trim()
   .toLowerCase();
@@ -1110,62 +1102,15 @@ function formatBundleExpiryForEmail(activeUntil) {
 }
 
 async function sendBundleCartEmail({ to, subject, text }) {
-  const recipient = String(to || "").trim();
-  if (!recipient) {
-    throw new Error("missing_recipient");
-  }
-
-  if (BUNDLECART_EMAIL_PROVIDER === "resend") {
-    if (!BUNDLECART_EMAIL_API_KEY || !BUNDLECART_EMAIL_FROM) {
-      throw new Error("missing_resend_email_config");
-    }
-    const response = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${BUNDLECART_EMAIL_API_KEY}`
-      },
-      body: JSON.stringify({
-        from: BUNDLECART_EMAIL_FROM,
-        to: [recipient],
-        subject,
-        text
-      })
-    });
-    if (!response.ok) {
-      const responseText = await response.text();
-      throw new Error(`resend_status_${response.status}:${responseText}`);
-    }
-    return;
-  }
-
-  if (BUNDLECART_EMAIL_PROVIDER === "webhook") {
-    if (!BUNDLECART_EMAIL_WEBHOOK_URL) {
-      throw new Error("missing_email_webhook_url");
-    }
-    const webhookHeaders = {
-      "Content-Type": "application/json"
-    };
-    if (BUNDLECART_EMAIL_WEBHOOK_AUTH_TOKEN) {
-      webhookHeaders.Authorization = `Bearer ${BUNDLECART_EMAIL_WEBHOOK_AUTH_TOKEN}`;
-    }
-    const response = await fetch(BUNDLECART_EMAIL_WEBHOOK_URL, {
-      method: "POST",
-      headers: webhookHeaders,
-      body: JSON.stringify({
-        to: recipient,
-        subject,
-        text
-      })
-    });
-    if (!response.ok) {
-      const responseText = await response.text();
-      throw new Error(`email_webhook_status_${response.status}:${responseText}`);
-    }
-    return;
-  }
-
-  throw new Error("email_provider_not_configured");
+  const html = String(text || "")
+    .split("\n")
+    .map((line) => `<p>${line}</p>`)
+    .join("");
+  await sendEmail({
+    to,
+    subject,
+    html
+  });
 }
 
 async function getBundleNotificationSummary(bundleId) {
@@ -1182,10 +1127,9 @@ async function sendBundleStartedEmailNotification(bundleId, fallbackEmail) {
     const recipient = String(summary?.customer_email || fallbackEmail || "").trim().toLowerCase();
     const orderCount = Number(summary?.order_count || 0);
     const expiry = formatBundleExpiryForEmail(summary?.active_until);
-    const subject = "Your BundleCart bundle has started";
+    const subject = "Your BundleCart shipping window is open";
     const text = [
-      "Your BundleCart bundle has started with a fixed $5 network fee.",
-      "You now have 72 hours to add more orders to the same destination and ship everything together for free.",
+      "You can place additional orders in the next 72 hours and ship them together with BundleCart.",
       "",
       `Bundle ID: ${bundleId}`,
       `Bundle expires: ${expiry}`,
@@ -1204,9 +1148,9 @@ async function sendBundleOrderAddedEmailNotification(bundleId, fallbackEmail) {
     const recipient = String(summary?.customer_email || fallbackEmail || "").trim().toLowerCase();
     const orderCount = Number(summary?.order_count || 0);
     const expiry = formatBundleExpiryForEmail(summary?.active_until);
-    const subject = "A new order was added to your BundleCart";
+    const subject = "A new order was added to your BundleCart bundle";
     const text = [
-      "A new order was added to your active BundleCart.",
+      "Another order was added to your active BundleCart bundle.",
       "",
       `Bundle ID: ${bundleId}`,
       `Updated order count: ${orderCount}`,
