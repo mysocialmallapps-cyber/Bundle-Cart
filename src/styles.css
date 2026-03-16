@@ -470,6 +470,7 @@ input:focus {
   font-size: 0.94rem;
   text-decoration: none;
   border: 1px solid transparent;
+  cursor: pointer;
   transition:
     transform 140ms ease,
     box-shadow 140ms ease,
@@ -767,6 +768,75 @@ input:focus {
   justify-self: center;
 }
 
+.marketing-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(27, 18, 52, 0.55);
+  backdrop-filter: blur(3px);
+  display: grid;
+  place-items: center;
+  z-index: 1000;
+  padding: 16px;
+}
+
+.marketing-modal {
+  width: min(520px, 100%);
+  background: linear-gradient(180deg, #ffffff 0%, #f8f5ff 100%);
+  border: 1px solid #ddd1ff;
+  border-radius: 18px;
+  padding: 20px;
+  box-shadow: 0 24px 50px rgba(27, 18, 52, 0.28);
+  display: grid;
+  gap: 10px;
+}
+
+.marketing-modal h3 {
+  margin: 0;
+  color: #231a40;
+}
+
+.marketing-modal p {
+  margin: 0;
+  color: #5a5373;
+}
+
+.marketing-modal-form {
+  display: grid;
+  gap: 10px;
+}
+
+.marketing-modal-label {
+  color: #362a63;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.marketing-modal-input {
+  border: 1px solid #c9b8ff;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 0.95rem;
+}
+
+.marketing-modal-input:focus {
+  outline: 2px solid #ddccff;
+  border-color: #7f4dff;
+}
+
+.marketing-modal-error {
+  margin: 0;
+  color: #c62828;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.marketing-modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
 @media (max-width: 1100px) {
   .app-shell {
     grid-template-columns: 220px 1fr;
@@ -844,5 +914,9 @@ input:focus {
 
   .marketing-section-tinted {
     padding: 16px;
+  }
+
+  .marketing-modal-actions {
+    justify-content: stretch;
   }
 }
