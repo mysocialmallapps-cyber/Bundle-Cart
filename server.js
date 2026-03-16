@@ -3605,7 +3605,7 @@ export function createApp() {
     }
     const shop = accessCheck.shop;
     console.log("APP ROOT AUTHORIZED", shop);
-    res.status(200).send("ok");
+    res.redirect(`/dashboard?shop=${encodeURIComponent(shop)}`);
   });
 
   app.use(express.static(DIST_PATH));
