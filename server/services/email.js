@@ -12,6 +12,218 @@ const EMAIL_FROM = process.env.EMAIL_FROM || "BundleCart <noreply@mail.bundlecar
 
 let resendClient = null;
 let providerConfiguredLogged = false;
+const BUNDLECART_BRAND_PURPLE = "#6C4CF5";
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function formatExpiryDateTime(activeUntil) {
+  if (!activeUntil) {
+    return "N/A";
+  }
+  const parsed = new Date(activeUntil);
+  if (Number.isNaN(parsed.getTime())) {
+    return "N/A";
+  }
+  return parsed.toUTCString();
+}
+
+function formatTimeLeft(activeUntil) {
+  if (!activeUntil) {
+    return "N/A";
+  }
+  const expiryMs = new Date(activeUntil).getTime();
+  if (!Number.isFinite(expiryMs)) {
+    return "N/A";
+  }
+  const deltaMs = expiryMs - Date.now();
+  if (deltaMs <= 0) {
+    return "0h 0m";
+  }
+  const totalMinutes = Math.floor(deltaMs / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (!Number.isFinite(minutes)) {
+    return `${hours} hours`;
+  }
+  return `${hours}h ${minutes}m`;
+}
+
+function buildEmailLayout({
+  headline,
+  subtext,
+  activeUntil,
+  orderCount,
+  ctaText,
+  ctaUrl,
+  urgencyText,
+  secondaryCopy
+}) {
+  const fallbackCtaUrl = String(process.env.APP_URL || "https://bundle-cart.replit.app").trim();
+  const resolvedCtaUrl = String(ctaUrl || fallbackCtaUrl).trim();
+  const safeHeadline = escapeHtml(headline);
+  const safeSubtext = escapeHtml(subtext);
+  const safeOrderCount = String(Number.isFinite(orderCount) ? orderCount : 0);
+  const safeExpiry = escapeHtml(formatExpiryDateTime(activeUntil));
+  const safeTimeLeft = escapeHtml(formatTimeLeft(activeUntil));
+  const safeCtaText = escapeHtml(ctaText);
+  const safeCtaUrl = escapeHtml(resolvedCtaUrl);
+  const safeUrgencyText = escapeHtml(urgencyText || `Only ${formatTimeLeft(activeUntil)} left to add more orders.`);
+  const safeSecondaryCopy = escapeHtml(secondaryCopy || "");
+
+  return `
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background-color:#F4F1FF;margin:0;padding:24px 0;">
+  <tr>
+    <td align="center" style="padding:0 12px;">
+      <table role="presentation" width="620" cellspacing="0" cellpadding="0" border="0" style="width:620px;max-width:620px;background-color:#ffffff;border:1px solid #E8E1FF;border-radius:16px;overflow:hidden;">
+        <tr>
+          <td style="padding:20px 28px 16px 28px;font-family:Arial,sans-serif;font-size:22px;line-height:28px;font-weight:700;color:${BUNDLECART_BRAND_PURPLE};">
+            BundleCart
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:0 28px;">
+            <div style="height:1px;background:#ECE8FF;"></div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:24px 28px 0 28px;font-family:Arial,sans-serif;">
+            <div style="font-size:28px;line-height:34px;font-weight:700;color:#1B1640;">${safeHeadline}</div>
+            <div style="margin-top:10px;font-size:16px;line-height:24px;color:#433E69;">
+              ${safeSubtext}
+            </div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:20px 28px 0 28px;">
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#F7F5FF;border:1px solid #E7E0FF;border-radius:12px;">
+              <tr>
+                <td style="padding:16px 18px;font-family:Arial,sans-serif;">
+                  <div style="font-size:13px;color:#5A5587;line-height:18px;">Time left</div>
+                  <div style="margin-top:3px;font-size:24px;line-height:30px;font-weight:700;color:${BUNDLECART_BRAND_PURPLE};">Time left: ${safeTimeLeft}</div>
+                  <div style="margin-top:10px;font-size:14px;line-height:20px;color:#2D2759;"><strong>Expires:</strong> ${safeExpiry}</div>
+                  <div style="margin-top:6px;font-size:14px;line-height:20px;color:#2D2759;"><strong>Orders in bundle:</strong> ${safeOrderCount}</div>
+                  <div style="margin-top:10px;font-size:14px;line-height:20px;color:#433E69;">You've unlocked 72 hours of free BundleCart shipping. Keep shopping and add more orders before your window closes.</div>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+        <tr>
+          <td align="center" style="padding:24px 28px 0 28px;">
+            <a href="${safeCtaUrl}" style="display:inline-block;background:${BUNDLECART_BRAND_PURPLE};color:#ffffff;text-decoration:none;font-family:Arial,sans-serif;font-size:17px;line-height:22px;font-weight:700;padding:14px 28px;border-radius:10px;">${safeCtaText}</a>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:12px 28px 0 28px;font-family:Arial,sans-serif;font-size:13px;line-height:20px;color:#5D578C;text-align:center;">
+            If the button doesn't work, open this link:<br />
+            <a href="${safeCtaUrl}" style="color:${BUNDLECART_BRAND_PURPLE};word-break:break-all;">${safeCtaUrl}</a>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:18px 28px 0 28px;font-family:Arial,sans-serif;font-size:15px;line-height:22px;color:#3E3968;">
+            ${safeSecondaryCopy}
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:14px 28px 0 28px;">
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#FFF5F5;border:1px solid #FFD8DD;border-radius:10px;">
+              <tr>
+                <td style="padding:12px 14px;font-family:Arial,sans-serif;font-size:14px;line-height:20px;color:#9A2640;font-weight:700;">
+                  ${safeUrgencyText}
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:22px 28px 26px 28px;font-family:Arial,sans-serif;font-size:12px;line-height:19px;color:#706A99;">
+            BundleCart is a network shipping layer that helps you pay shipping once, then keep adding orders with free BundleCart shipping during your active window.
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>`;
+}
+
+export function buildBundleStartedEmailTemplate({ activeUntil, orderCount, bundleUrl }) {
+  return {
+    subject: "Your BundleCart window is open",
+    html: buildEmailLayout({
+      headline: "Your BundleCart window is open",
+      subtext:
+        "Pay shipping once, then keep shopping. Orders you add in the next 72 hours can ship free with BundleCart.",
+      activeUntil,
+      orderCount,
+      ctaText: "Continue shopping",
+      ctaUrl: bundleUrl,
+      secondaryCopy:
+        "You can keep adding orders from participating stores with free BundleCart shipping while your window is active.",
+      urgencyText: "Your window is open now. Add more orders before it closes."
+    })
+  };
+}
+
+export function buildBundleOrderAddedEmailTemplate({ activeUntil, orderCount, bundleUrl }) {
+  return {
+    subject: "A new order was added to your BundleCart bundle",
+    html: buildEmailLayout({
+      headline: "Another order joined your bundle",
+      subtext:
+        "Great news - your bundle keeps growing. Keep going while your shipping window stays open.",
+      activeUntil,
+      orderCount,
+      ctaText: "View your bundle",
+      ctaUrl: bundleUrl,
+      secondaryCopy:
+        "You can still add more orders from participating stores with free BundleCart shipping during this same window.",
+      urgencyText: "Only a limited time remains to add more orders."
+    })
+  };
+}
+
+export function buildBundleReminderEmailTemplate({ activeUntil, orderCount, bundleUrl }) {
+  return {
+    subject: "Your BundleCart window closes soon",
+    html: buildEmailLayout({
+      headline: "Your BundleCart window closes soon",
+      subtext:
+        "Don't miss your free linked shipping window. Add another order before time runs out.",
+      activeUntil,
+      orderCount,
+      ctaText: "Continue shopping",
+      ctaUrl: bundleUrl,
+      secondaryCopy:
+        "You can keep adding orders from participating stores with free BundleCart shipping until your timer reaches zero.",
+      urgencyText: "Your window closes soon. Only a short time is left."
+    })
+  };
+}
+
+export function buildBundleExpiredEmailTemplate({ activeUntil, orderCount, bundleUrl }) {
+  return {
+    subject: "Your BundleCart shipping window has closed",
+    html: buildEmailLayout({
+      headline: "Your BundleCart window has closed",
+      subtext:
+        "Your current bundle window ended. You can start a new bundle the next time you check out with BundleCart.",
+      activeUntil,
+      orderCount,
+      ctaText: "Start a new bundle",
+      ctaUrl: bundleUrl,
+      secondaryCopy:
+        "When you place your next BundleCart order, you'll open a new 72-hour window to link more orders.",
+      urgencyText: "This window has ended. Start a new bundle on your next order."
+    })
+  };
+}
 
 function getResendClient() {
   if (EMAIL_PROVIDER !== "resend") {

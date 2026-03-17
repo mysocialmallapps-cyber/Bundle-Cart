@@ -3,7 +3,13 @@ import path from "node:path";
 import express from "express";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
-import { sendEmail } from "./server/services/email.js";
+import {
+  buildBundleExpiredEmailTemplate,
+  buildBundleOrderAddedEmailTemplate,
+  buildBundleReminderEmailTemplate,
+  buildBundleStartedEmailTemplate,
+  sendEmail
+} from "./server/services/email.js";
 
 const DIST_PATH = path.resolve("dist");
 const { Pool } = pg;
@@ -1306,15 +1312,26 @@ function formatBundleExpiryForEmail(activeUntil) {
   return parsed.toUTCString();
 }
 
-async function sendBundleCartEmail({ to, subject, text }) {
-  const html = String(text || "")
-    .split("\n")
-    .map((line) => `<p>${line}</p>`)
-    .join("");
+function escapeHtmlForEmail(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+async function sendBundleCartEmail({ to, subject, text, html }) {
+  const renderedHtml =
+    String(html || "").trim() ||
+    String(text || "")
+      .split("\n")
+      .map((line) => `<p>${escapeHtmlForEmail(line)}</p>`)
+      .join("");
   await sendEmail({
     to,
     subject,
-    html
+    html: renderedHtml
   });
 }
 
@@ -1331,21 +1348,16 @@ async function sendBundleStartedEmailNotification(bundleId, fallbackEmail) {
     const summary = await getBundleNotificationSummary(bundleId);
     const recipient = String(summary?.customer_email || fallbackEmail || "").trim().toLowerCase();
     const orderCount = Number(summary?.order_count || 0);
-    const expiry = formatBundleExpiryForEmail(summary?.active_until);
     const bundleToken =
       String(summary?.bundle_public_token || "").trim() ||
       (await ensureBundlePublicTokenForGroup(bundleId));
     const bundleUrl = buildPublicBundleUrl(bundleToken);
-    const subject = "Your BundleCart shipping window is open";
-    const text = [
-      "You can place additional orders in the next 72 hours and ship them together with BundleCart.",
-      "",
-      `Bundle ID: ${bundleId}`,
-      `Bundle expires: ${expiry}`,
-      `Current order count: ${orderCount}`,
-      ...(bundleUrl ? ["", "View your BundleCart window", bundleUrl] : [])
-    ].join("\n");
-    await sendBundleCartEmail({ to: recipient, subject, text });
+    const template = buildBundleStartedEmailTemplate({
+      activeUntil: summary?.active_until,
+      orderCount,
+      bundleUrl
+    });
+    await sendBundleCartEmail({ to: recipient, subject: template.subject, html: template.html });
     console.log("BUNDLECART EMAIL BUNDLE STARTED", bundleId, recipient);
   } catch (error) {
     console.error("BUNDLECART EMAIL BUNDLE STARTED ERROR", bundleId, error);
@@ -1357,21 +1369,16 @@ async function sendBundleOrderAddedEmailNotification(bundleId, fallbackEmail) {
     const summary = await getBundleNotificationSummary(bundleId);
     const recipient = String(summary?.customer_email || fallbackEmail || "").trim().toLowerCase();
     const orderCount = Number(summary?.order_count || 0);
-    const expiry = formatBundleExpiryForEmail(summary?.active_until);
     const bundleToken =
       String(summary?.bundle_public_token || "").trim() ||
       (await ensureBundlePublicTokenForGroup(bundleId));
     const bundleUrl = buildPublicBundleUrl(bundleToken);
-    const subject = "A new order was added to your BundleCart bundle";
-    const text = [
-      "Another order was added to your active BundleCart bundle.",
-      "",
-      `Bundle ID: ${bundleId}`,
-      `Updated order count: ${orderCount}`,
-      `Bundle expires: ${expiry}`,
-      ...(bundleUrl ? ["", "View your BundleCart window", bundleUrl] : [])
-    ].join("\n");
-    await sendBundleCartEmail({ to: recipient, subject, text });
+    const template = buildBundleOrderAddedEmailTemplate({
+      activeUntil: summary?.active_until,
+      orderCount,
+      bundleUrl
+    });
+    await sendBundleCartEmail({ to: recipient, subject: template.subject, html: template.html });
     console.log("BUNDLECART EMAIL ORDER ADDED", bundleId, recipient);
   } catch (error) {
     console.error("BUNDLECART EMAIL ORDER ADDED ERROR", bundleId, error);
@@ -1380,33 +1387,27 @@ async function sendBundleOrderAddedEmailNotification(bundleId, fallbackEmail) {
 
 async function sendBundleReminderEmail(bundle) {
   const bundleId = Number(bundle?.id || 0);
-  const recipient = String(bundle?.email || "").trim().toLowerCase();
-  console.log("BUNDLECART EMAIL BUNDLE REMINDER START", bundleId, recipient);
+  console.log("BUNDLECART EMAIL BUNDLE REMINDER START", bundleId);
 
-  if (!recipient) {
-    console.error("BUNDLECART EMAIL BUNDLE REMINDER ERROR", bundleId, "missing_recipient");
-    return false;
-  }
-
-  const subject = "Your BundleCart window closes soon";
-  let bundleUrl = "";
   try {
+    const summary = await getBundleNotificationSummary(bundleId);
+    const recipient = String(summary?.customer_email || bundle?.email || "")
+      .trim()
+      .toLowerCase();
+    if (!recipient) {
+      console.error("BUNDLECART EMAIL BUNDLE REMINDER ERROR", bundleId, "missing_recipient");
+      return false;
+    }
+
+    const orderCount = Number(summary?.order_count || 0);
     const bundleToken = await ensureBundlePublicTokenForGroup(bundleId);
-    bundleUrl = buildPublicBundleUrl(bundleToken);
-  } catch (error) {
-    console.error("BUNDLECART EMAIL BUNDLE REMINDER ERROR", bundleId, error);
-  }
-  const text = [
-    "Your BundleCart window is still open.",
-    "",
-    "Add another order before it closes and it will ship free with your bundle.",
-    "",
-    "Time remaining: less than 24 hours.",
-    ...(bundleUrl ? ["", "View your BundleCart window", bundleUrl] : [])
-  ].join("\n");
-
-  try {
-    await sendBundleCartEmail({ to: recipient, subject, text });
+    const bundleUrl = buildPublicBundleUrl(bundleToken);
+    const template = buildBundleReminderEmailTemplate({
+      activeUntil: summary?.active_until || bundle?.active_until,
+      orderCount,
+      bundleUrl
+    });
+    await sendBundleCartEmail({ to: recipient, subject: template.subject, html: template.html });
     console.log("BUNDLECART EMAIL BUNDLE REMINDER SENT", bundleId, recipient);
     return true;
   } catch (error) {
@@ -1417,25 +1418,28 @@ async function sendBundleReminderEmail(bundle) {
 
 async function sendBundleExpiredEmail(bundle) {
   const bundleId = Number(bundle?.id || 0);
-  const recipient = String(bundle?.email || "").trim().toLowerCase();
-  console.log("BUNDLECART EMAIL BUNDLE EXPIRED START", bundleId, recipient);
-
-  if (!recipient) {
-    console.error("BUNDLECART EMAIL BUNDLE EXPIRED ERROR", bundleId, "missing_recipient");
-    return false;
-  }
-
-  const subject = "Your BundleCart shipping window has closed";
-  const text = [
-    "Your BundleCart shipping window has closed.",
-    "",
-    "Your orders will now ship separately.",
-    "",
-    "You can start a new BundleCart bundle anytime on your next order."
-  ].join("\n");
+  console.log("BUNDLECART EMAIL BUNDLE EXPIRED START", bundleId);
 
   try {
-    await sendBundleCartEmail({ to: recipient, subject, text });
+    const summary = await getBundleNotificationSummary(bundleId);
+    const recipient = String(summary?.customer_email || bundle?.email || "")
+      .trim()
+      .toLowerCase();
+    if (!recipient) {
+      console.error("BUNDLECART EMAIL BUNDLE EXPIRED ERROR", bundleId, "missing_recipient");
+      return false;
+    }
+    const orderCount = Number(summary?.order_count || 0);
+    const bundleToken =
+      String(summary?.bundle_public_token || "").trim() ||
+      (await ensureBundlePublicTokenForGroup(bundleId));
+    const bundleUrl = buildPublicBundleUrl(bundleToken);
+    const template = buildBundleExpiredEmailTemplate({
+      activeUntil: summary?.active_until || bundle?.active_until,
+      orderCount,
+      bundleUrl
+    });
+    await sendBundleCartEmail({ to: recipient, subject: template.subject, html: template.html });
     console.log("BUNDLECART EMAIL BUNDLE EXPIRED SENT", bundleId, recipient);
     return true;
   } catch (error) {
