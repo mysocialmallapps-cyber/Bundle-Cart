@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">BundleCart avatar logo</title>
+  <desc id="desc">Simplified BundleCart cart icon with white B for small-size avatar use</desc>
+
+  <g transform="translate(-4 -18)">
+    <path d="M168 126H468L430 320H234L168 126Z" fill="#6d28d9"/>
+    <path d="M70 108H150L236 355H392" fill="none" stroke="#6d28d9" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="268" cy="422" r="36" fill="#6d28d9"/>
+    <circle cx="370" cy="422" r="36" fill="#6d28d9"/>
+    <text x="332" y="200" fill="#ffffff" font-family="Inter, Arial, Helvetica, sans-serif" font-size="184" font-weight="800" text-anchor="middle" dominant-baseline="middle">B</text>
+  </g>
+</svg>
