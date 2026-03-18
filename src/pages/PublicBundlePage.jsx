@@ -353,12 +353,21 @@ function scoreDiscoveryBrand(brand, primaryProfile) {
   return score;
 }
 
-function formatRemaining(activeUntil, nowMs) {
+function formatRemaining(activeUntil, nowMs, bundleState) {
   const expiresMs = new Date(activeUntil || "").getTime();
   const parsedExpiry = new Date(activeUntil || "");
   const expiresLabel = Number.isFinite(parsedExpiry.getTime())
     ? parsedExpiry.toLocaleString()
     : "Unknown";
+
+  if (String(bundleState || "").toLowerCase() === "expired") {
+    return {
+      closed: true,
+      countdownLabel: "Your BundleCart window has closed.",
+      expiresLabel,
+      urgencyLabel: "This bundle window has ended. Start a new order to open a fresh 72-hour window."
+    };
+  }
 
   if (!Number.isFinite(expiresMs)) {
     return {
@@ -547,6 +556,7 @@ export default function PublicBundlePage() {
           setBundle({
             bundle_id: payload?.bundle_id,
             active_until: payload?.active_until,
+            bundle_state: payload?.bundle_state,
             orders: Array.isArray(payload?.orders) ? payload.orders : []
           });
           setLoading(false);
@@ -583,8 +593,8 @@ export default function PublicBundlePage() {
   }, [token, queryBundleId, queryEmail]);
 
   const remaining = useMemo(
-    () => formatRemaining(bundle?.active_until, nowMs),
-    [bundle?.active_until, nowMs]
+    () => formatRemaining(bundle?.active_until, nowMs, bundle?.bundle_state),
+    [bundle?.active_until, bundle?.bundle_state, nowMs]
   );
   const orderCount = bundle?.orders?.length || 0;
   const progressMessage = useMemo(
@@ -611,12 +621,16 @@ export default function PublicBundlePage() {
         <h1>
           {bundleFound === false
             ? "No active BundleCart found for this link"
-            : "Your BundleCart window is open"}
+            : remaining.closed
+              ? "Your BundleCart window has closed"
+              : "Your BundleCart window is open"}
         </h1>
         <p className="public-bundle-subtext">
           {bundleFound === false
             ? "Try placing a new order to start a BundleCart shipping window."
-            : "You've unlocked 72 hours of free BundleCart shipping. Keep shopping and add more orders before your window closes."}
+            : remaining.closed
+              ? "This bundle has expired. Place a new order to start another 72-hour BundleCart window."
+              : "You've unlocked 72 hours of free BundleCart shipping. Keep shopping and add more orders before your window closes."}
         </p>
         {!loading && !error && bundleFound !== false && bundle ? (
           <>
@@ -632,9 +646,19 @@ export default function PublicBundlePage() {
               </span>
             </div>
             <p className="public-bundle-progress">{progressMessage}</p>
-            <button type="button" className="marketing-btn marketing-btn-primary" onClick={handleContinueShopping}>
-              Continue shopping
-            </button>
+            {remaining.closed ? (
+              <a href="/" className="marketing-btn marketing-btn-primary">
+                Start a new bundle
+              </a>
+            ) : (
+              <button
+                type="button"
+                className="marketing-btn marketing-btn-primary"
+                onClick={handleContinueShopping}
+              >
+                Continue shopping
+              </button>
+            )}
           </>
         ) : null}
       </section>

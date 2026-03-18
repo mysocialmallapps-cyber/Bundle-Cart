@@ -502,6 +502,11 @@ SELECT
   lg.id,
   lg.email AS customer_email,
   lg.active_until,
+  CASE
+    WHEN lg.active_until IS NOT NULL AND lg.active_until > NOW() THEN 'active'
+    ELSE 'expired'
+  END AS bundle_state,
+  NOW() AS current_server_time,
   lg.first_shop_domain,
   lo.shopify_order_id AS order_id,
   lo.shop_domain
@@ -517,6 +522,11 @@ SELECT
   lg.id,
   lg.email AS customer_email,
   lg.active_until,
+  CASE
+    WHEN lg.active_until IS NOT NULL AND lg.active_until > NOW() THEN 'active'
+    ELSE 'expired'
+  END AS bundle_state,
+  NOW() AS current_server_time,
   lg.first_shop_domain,
   lo.shopify_order_id AS order_id,
   lo.shop_domain
@@ -3117,8 +3127,10 @@ export function createApp() {
 
   const emptyPublicBundleResponse = {
     bundleFound: false,
+    bundle_state: "not_found",
     bundle_id: null,
     active_until: null,
+    current_server_time: null,
     orders: []
   };
 
@@ -3138,9 +3150,14 @@ export function createApp() {
 
   function mapPublicBundleRows(rows) {
     if (!Array.isArray(rows) || rows.length === 0) {
-      return { ...emptyPublicBundleResponse };
+      return {
+        ...emptyPublicBundleResponse,
+        current_server_time: new Date().toISOString()
+      };
     }
     const firstRow = rows[0];
+    const bundleState =
+      String(firstRow.bundle_state || "").trim().toLowerCase() === "active" ? "active" : "expired";
     const orders = rows
       .filter((row) => row.order_id != null)
       .map((row) => ({
@@ -3150,8 +3167,13 @@ export function createApp() {
 
     return {
       bundleFound: true,
+      bundle_state: bundleState,
       bundle_id: Number(firstRow.id),
       active_until: firstRow.active_until,
+      current_server_time:
+        firstRow.current_server_time != null
+          ? new Date(firstRow.current_server_time).toISOString()
+          : new Date().toISOString(),
       orders
     };
   }
@@ -3167,13 +3189,21 @@ export function createApp() {
     });
 
     if (!dbPool) {
+      const emptyPayload = {
+        ...emptyPublicBundleResponse,
+        current_server_time: new Date().toISOString()
+      };
       console.log("BUNDLE PUBLIC LOOKUP RESULT", {
         bundleId: resolvedBundleId,
         email: normalizedEmail,
         fallbackUsed,
-        bundleFound: false
+        bundleFound: false,
+        matchedBundleId: emptyPayload.bundle_id,
+        activeUntil: emptyPayload.active_until,
+        currentServerTime: emptyPayload.current_server_time,
+        finalState: emptyPayload.bundle_state
       });
-      return { ...emptyPublicBundleResponse };
+      return emptyPayload;
     }
     let resolvedRows = [];
 
@@ -3203,7 +3233,11 @@ export function createApp() {
       bundleId: resolvedBundleId,
       email: normalizedEmail,
       fallbackUsed,
-      bundleFound: payload.bundleFound
+      bundleFound: payload.bundleFound,
+      matchedBundleId: payload.bundle_id,
+      activeUntil: payload.active_until,
+      currentServerTime: payload.current_server_time,
+      finalState: payload.bundle_state
     });
     return payload;
   }
@@ -3608,7 +3642,10 @@ export function createApp() {
         email: normalizeLookupEmail(req.query.email),
         error: error?.message || String(error)
       });
-      res.status(200).json({ ...emptyPublicBundleResponse });
+      res.status(200).json({
+        ...emptyPublicBundleResponse,
+        current_server_time: new Date().toISOString()
+      });
     }
   });
 
@@ -3620,20 +3657,31 @@ export function createApp() {
       email: lookupEmail
     });
     if (!dbPool) {
+      const emptyPayload = {
+        ...emptyPublicBundleResponse,
+        current_server_time: new Date().toISOString()
+      };
       console.log("BUNDLE PUBLIC LOOKUP RESULT", {
         token,
         email: lookupEmail,
         fallbackUsed: false,
-        bundleFound: false
+        bundleFound: false,
+        tokenMatched: false,
+        matchedBundleId: emptyPayload.bundle_id,
+        activeUntil: emptyPayload.active_until,
+        currentServerTime: emptyPayload.current_server_time,
+        finalState: emptyPayload.bundle_state
       });
-      res.status(200).json({ ...emptyPublicBundleResponse });
+      res.status(200).json(emptyPayload);
       return;
     }
 
     try {
       let fallbackUsed = false;
+      let tokenMatched = false;
 
       let result = token ? await dbPool.query(SELECT_LINK_GROUP_BY_TOKEN_SQL, [token]) : { rows: [] };
+      tokenMatched = result.rows.length > 0;
 
       if (result.rows.length === 0 && lookupEmail) {
         fallbackUsed = true;
@@ -3651,9 +3699,14 @@ export function createApp() {
       const payload = mapPublicBundleRows(result.rows);
       console.log("BUNDLE PUBLIC LOOKUP RESULT", {
         token,
+        tokenMatched,
         email: lookupEmail,
         fallbackUsed,
-        bundleFound: payload.bundleFound
+        bundleFound: payload.bundleFound,
+        matchedBundleId: payload.bundle_id,
+        activeUntil: payload.active_until,
+        currentServerTime: payload.current_server_time,
+        finalState: payload.bundle_state
       });
       res.status(200).json(payload);
     } catch (error) {
@@ -3662,7 +3715,10 @@ export function createApp() {
         email: lookupEmail,
         error: error?.message || String(error)
       });
-      res.status(200).json({ ...emptyPublicBundleResponse });
+      res.status(200).json({
+        ...emptyPublicBundleResponse,
+        current_server_time: new Date().toISOString()
+      });
     }
   });
 
