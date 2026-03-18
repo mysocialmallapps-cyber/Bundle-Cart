@@ -12,7 +12,8 @@ export default function App() {
     .trim()
     .toLowerCase();
   const isMerchantDashboard = location.pathname === "/dashboard";
-  const isPublicBundlePage = location.pathname.startsWith("/bundle/");
+  const isPublicBundlePage =
+    location.pathname === "/bundle" || location.pathname.startsWith("/bundle/");
   const isMarketingPage = location.pathname === "/marketing" || location.pathname === "/";
   const navItems = isMerchantDashboard
     ? [
@@ -29,6 +30,7 @@ export default function App() {
         <section className="page-content">
           <Routes>
             <Route path="/" element={<MarketingPage />} />
+            <Route path="/bundle" element={<PublicBundlePage />} />
             <Route path="/bundle/:token" element={<PublicBundlePage />} />
             <Route path="/marketing" element={<MarketingPage />} />
           </Routes>

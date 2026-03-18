@@ -500,6 +500,7 @@ LIMIT 1;
 const SELECT_LINK_GROUP_BY_TOKEN_SQL = `
 SELECT
   lg.id,
+  lg.email AS customer_email,
   lg.active_until,
   lg.first_shop_domain,
   lo.shopify_order_id AS order_id,
@@ -509,6 +510,32 @@ LEFT JOIN linked_orders lo
   ON lo.group_id = lg.id
 WHERE lg.bundle_public_token = $1::text
 ORDER BY lo.created_at ASC NULLS LAST, lo.inserted_at ASC NULLS LAST;
+`;
+
+const SELECT_LINK_GROUP_BY_ID_SQL = `
+SELECT
+  lg.id,
+  lg.email AS customer_email,
+  lg.active_until,
+  lg.first_shop_domain,
+  lo.shopify_order_id AS order_id,
+  lo.shop_domain
+FROM link_groups lg
+LEFT JOIN linked_orders lo
+  ON lo.group_id = lg.id
+WHERE lg.id = $1::integer
+ORDER BY lo.created_at ASC NULLS LAST, lo.inserted_at ASC NULLS LAST;
+`;
+
+const SELECT_RECENT_ACTIVE_LINK_GROUP_BY_EMAIL_SQL = `
+SELECT lg.id
+FROM link_groups lg
+WHERE LOWER(COALESCE(lg.email, '')) = LOWER($1::text)
+  AND lg.active_until IS NOT NULL
+  AND lg.active_until > NOW()
+  AND lg.active_until >= NOW() - INTERVAL '72 hours'
+ORDER BY lg.active_until DESC
+LIMIT 1;
 `;
 
 const SELECT_MERCHANT_DASHBOARD_METRICS_SQL = `
@@ -1212,13 +1239,19 @@ async function ensureBundlePublicTokenForGroup(bundleId) {
   throw new Error("bundle_public_token_generation_failed");
 }
 
-function buildPublicBundleUrl(token) {
-  const publicToken = String(token || "").trim();
-  if (!publicToken) {
+function buildPublicBundleUrl({ bundleId, customerEmail }) {
+  const normalizedBundleId = String(bundleId || "").trim();
+  const normalizedCustomerEmail = String(customerEmail || "")
+    .trim()
+    .toLowerCase();
+  if (!normalizedBundleId) {
     return "";
   }
   const appUrl = String(process.env.APP_URL || "https://bundle-cart.replit.app").replace(/\/+$/, "");
-  return `${appUrl}/bundle/${encodeURIComponent(publicToken)}`;
+  const params = new URLSearchParams();
+  params.set("bundleId", normalizedBundleId);
+  params.set("email", normalizedCustomerEmail);
+  return `${appUrl}/bundle?${params.toString()}`;
 }
 
 function toBillingFailureReason(errorOrReason) {
@@ -1378,10 +1411,10 @@ async function sendBundleStartedEmailNotification(bundleId, fallbackEmail) {
     const summary = await getBundleNotificationSummary(bundleId);
     const recipient = String(summary?.customer_email || fallbackEmail || "").trim().toLowerCase();
     const orderCount = Number(summary?.order_count || 0);
-    const bundleToken =
-      String(summary?.bundle_public_token || "").trim() ||
-      (await ensureBundlePublicTokenForGroup(bundleId));
-    const bundleUrl = buildPublicBundleUrl(bundleToken);
+    const bundleUrl = buildPublicBundleUrl({
+      bundleId: summary?.bundle_id || bundleId,
+      customerEmail: recipient
+    });
     const template = buildBundleStartedEmailTemplate({
       activeUntil: summary?.active_until,
       orderCount,
@@ -1399,10 +1432,10 @@ async function sendBundleOrderAddedEmailNotification(bundleId, fallbackEmail) {
     const summary = await getBundleNotificationSummary(bundleId);
     const recipient = String(summary?.customer_email || fallbackEmail || "").trim().toLowerCase();
     const orderCount = Number(summary?.order_count || 0);
-    const bundleToken =
-      String(summary?.bundle_public_token || "").trim() ||
-      (await ensureBundlePublicTokenForGroup(bundleId));
-    const bundleUrl = buildPublicBundleUrl(bundleToken);
+    const bundleUrl = buildPublicBundleUrl({
+      bundleId: summary?.bundle_id || bundleId,
+      customerEmail: recipient
+    });
     const template = buildBundleOrderAddedEmailTemplate({
       activeUntil: summary?.active_until,
       orderCount,
@@ -1430,8 +1463,10 @@ async function sendBundleReminderEmail(bundle) {
     }
 
     const orderCount = Number(summary?.order_count || 0);
-    const bundleToken = await ensureBundlePublicTokenForGroup(bundleId);
-    const bundleUrl = buildPublicBundleUrl(bundleToken);
+    const bundleUrl = buildPublicBundleUrl({
+      bundleId: summary?.bundle_id || bundleId,
+      customerEmail: recipient
+    });
     const template = buildBundleReminderEmailTemplate({
       activeUntil: summary?.active_until || bundle?.active_until,
       orderCount,
@@ -1460,10 +1495,10 @@ async function sendBundleExpiredEmail(bundle) {
       return false;
     }
     const orderCount = Number(summary?.order_count || 0);
-    const bundleToken =
-      String(summary?.bundle_public_token || "").trim() ||
-      (await ensureBundlePublicTokenForGroup(bundleId));
-    const bundleUrl = buildPublicBundleUrl(bundleToken);
+    const bundleUrl = buildPublicBundleUrl({
+      bundleId: summary?.bundle_id || bundleId,
+      customerEmail: recipient
+    });
     const template = buildBundleExpiredEmailTemplate({
       activeUntil: summary?.active_until || bundle?.active_until,
       orderCount,
@@ -3080,6 +3115,99 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
 export function createApp() {
   const app = express();
 
+  const emptyPublicBundleResponse = {
+    bundleFound: false,
+    bundle_id: null,
+    active_until: null,
+    orders: []
+  };
+
+  function normalizeLookupEmail(input) {
+    return String(input || "")
+      .trim()
+      .toLowerCase();
+  }
+
+  function parseLookupBundleId(value) {
+    const parsed = Number.parseInt(String(value || "").trim(), 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return null;
+    }
+    return parsed;
+  }
+
+  function mapPublicBundleRows(rows) {
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return { ...emptyPublicBundleResponse };
+    }
+    const firstRow = rows[0];
+    const orders = rows
+      .filter((row) => row.order_id != null)
+      .map((row) => ({
+        order_id: String(row.order_id),
+        shop: String(row.shop_domain || "")
+      }));
+
+    return {
+      bundleFound: true,
+      bundle_id: Number(firstRow.id),
+      active_until: firstRow.active_until,
+      orders
+    };
+  }
+
+  async function resolvePublicBundleByIdOrEmail({ bundleId, email }) {
+    const normalizedEmail = normalizeLookupEmail(email);
+    let fallbackUsed = false;
+    let resolvedBundleId = parseLookupBundleId(bundleId);
+
+    console.log("BUNDLE PUBLIC LOOKUP START", {
+      bundleId: resolvedBundleId,
+      email: normalizedEmail
+    });
+
+    if (!dbPool) {
+      console.log("BUNDLE PUBLIC LOOKUP RESULT", {
+        bundleId: resolvedBundleId,
+        email: normalizedEmail,
+        fallbackUsed,
+        bundleFound: false
+      });
+      return { ...emptyPublicBundleResponse };
+    }
+    let resolvedRows = [];
+
+    if (resolvedBundleId != null) {
+      const byIdResult = await dbPool.query(SELECT_LINK_GROUP_BY_ID_SQL, [resolvedBundleId]);
+      resolvedRows = byIdResult.rows;
+    }
+
+    if (resolvedRows.length === 0 && normalizedEmail) {
+      fallbackUsed = true;
+      console.log("BUNDLE PUBLIC LOOKUP FALLBACK", {
+        bundleId: resolvedBundleId,
+        email: normalizedEmail
+      });
+      const fallbackResult = await dbPool.query(SELECT_RECENT_ACTIVE_LINK_GROUP_BY_EMAIL_SQL, [
+        normalizedEmail
+      ]);
+      if (fallbackResult.rowCount > 0) {
+        resolvedBundleId = Number(fallbackResult.rows[0].id);
+        const fallbackBundleResult = await dbPool.query(SELECT_LINK_GROUP_BY_ID_SQL, [resolvedBundleId]);
+        resolvedRows = fallbackBundleResult.rows;
+      }
+    }
+
+    const payload = mapPublicBundleRows(resolvedRows);
+    console.log("BUNDLE PUBLIC LOOKUP RESULT", {
+      bundleId: resolvedBundleId,
+      email: normalizedEmail,
+      fallbackUsed,
+      bundleFound: payload.bundleFound
+    });
+    return payload;
+  }
+
   // Capture raw body only for webhook routes (required for HMAC validation).
   app.use("/api/webhooks", express.raw({ type: "*/*", limit: "2mb" }));
 
@@ -3468,40 +3596,73 @@ export function createApp() {
     res.json({ ok: true, time: new Date().toISOString() });
   });
 
+  app.get("/api/bundle", async (req, res) => {
+    try {
+      const bundleId = String(req.query.bundleId || "").trim();
+      const email = normalizeLookupEmail(req.query.email);
+      const payload = await resolvePublicBundleByIdOrEmail({ bundleId, email });
+      res.status(200).json(payload);
+    } catch (error) {
+      console.error("BUNDLE PUBLIC API ERROR", {
+        bundleId: String(req.query.bundleId || "").trim(),
+        email: normalizeLookupEmail(req.query.email),
+        error: error?.message || String(error)
+      });
+      res.status(200).json({ ...emptyPublicBundleResponse });
+    }
+  });
+
   app.get("/api/bundle/:token", async (req, res) => {
     const token = String(req.params.token || "").trim();
-    if (!token) {
-      res.status(400).json({ ok: false, message: "Missing token" });
-      return;
-    }
+    const lookupEmail = normalizeLookupEmail(req.query.email);
+    console.log("BUNDLE PUBLIC LOOKUP START", {
+      token,
+      email: lookupEmail
+    });
     if (!dbPool) {
-      res.status(503).json({ ok: false, message: "Database unavailable" });
+      console.log("BUNDLE PUBLIC LOOKUP RESULT", {
+        token,
+        email: lookupEmail,
+        fallbackUsed: false,
+        bundleFound: false
+      });
+      res.status(200).json({ ...emptyPublicBundleResponse });
       return;
     }
 
     try {
-      const result = await dbPool.query(SELECT_LINK_GROUP_BY_TOKEN_SQL, [token]);
-      if (result.rowCount === 0) {
-        res.status(404).json({ ok: false, message: "Bundle not found" });
-        return;
+      let fallbackUsed = false;
+
+      let result = token ? await dbPool.query(SELECT_LINK_GROUP_BY_TOKEN_SQL, [token]) : { rows: [] };
+
+      if (result.rows.length === 0 && lookupEmail) {
+        fallbackUsed = true;
+        console.log("BUNDLE PUBLIC LOOKUP FALLBACK", {
+          token,
+          email: lookupEmail
+        });
+        const fallbackResult = await dbPool.query(SELECT_RECENT_ACTIVE_LINK_GROUP_BY_EMAIL_SQL, [lookupEmail]);
+        if (fallbackResult.rowCount > 0) {
+          const fallbackBundleId = Number(fallbackResult.rows[0].id);
+          result = await dbPool.query(SELECT_LINK_GROUP_BY_ID_SQL, [fallbackBundleId]);
+        }
       }
 
-      const firstRow = result.rows[0];
-      const orders = result.rows
-        .filter((row) => row.order_id != null)
-        .map((row) => ({
-          order_id: String(row.order_id),
-          shop: String(row.shop_domain || "")
-        }));
-
-      res.json({
-        bundle_id: Number(firstRow.id),
-        active_until: firstRow.active_until,
-        orders
+      const payload = mapPublicBundleRows(result.rows);
+      console.log("BUNDLE PUBLIC LOOKUP RESULT", {
+        token,
+        email: lookupEmail,
+        fallbackUsed,
+        bundleFound: payload.bundleFound
       });
+      res.status(200).json(payload);
     } catch (error) {
-      console.error("BUNDLE PUBLIC API ERROR", error);
-      res.status(500).json({ ok: false });
+      console.error("BUNDLE PUBLIC API ERROR", {
+        token,
+        email: lookupEmail,
+        error: error?.message || String(error)
+      });
+      res.status(200).json({ ...emptyPublicBundleResponse });
     }
   });
 

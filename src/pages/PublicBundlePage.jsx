@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 
 const CURATED_DISCOVERY_CATALOG = [
@@ -482,10 +482,16 @@ function buildDiscoveryStores(orders) {
 
 export default function PublicBundlePage() {
   const { token } = useParams();
+  const [searchParams] = useSearchParams();
+  const queryBundleId = String(searchParams.get("bundleId") || "").trim();
+  const queryEmail = String(searchParams.get("email") || "")
+    .trim()
+    .toLowerCase();
   const discoveryRef = useRef(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [bundle, setBundle] = useState(null);
+  const [bundleFound, setBundleFound] = useState(true);
   const [nowMs, setNowMs] = useState(Date.now());
 
   useEffect(() => {
@@ -495,44 +501,86 @@ export default function PublicBundlePage() {
 
   useEffect(() => {
     let mounted = true;
+    setLoading(true);
+    setError("");
+    setBundleFound(true);
     const publicToken = String(token || "").trim();
-    if (!publicToken) {
+
+    if (!publicToken && !queryBundleId && !queryEmail) {
       setLoading(false);
-      setError("Invalid bundle link.");
+      setBundleFound(false);
+      setError("");
       return () => {
         mounted = false;
       };
     }
 
-    api
-      .getPublicBundle(publicToken)
-      .then((payload) => {
-        if (!mounted) {
-          return;
-        }
-        setBundle({
-          bundle_id: payload?.bundle_id,
-          active_until: payload?.active_until,
-          orders: Array.isArray(payload?.orders) ? payload.orders : []
+    const fetchBundle = (attempt = 0) => {
+      api
+        .getPublicBundle({
+          token: publicToken,
+          bundleId: queryBundleId,
+          email: queryEmail
+        })
+        .then((payload) => {
+          if (!mounted) {
+            return;
+          }
+
+          if (!payload?.bundleFound) {
+            if (attempt === 0) {
+              setTimeout(() => {
+                if (mounted) {
+                  fetchBundle(1);
+                }
+              }, 1500);
+              return;
+            }
+            setBundleFound(false);
+            setError("");
+            setBundle(null);
+            setLoading(false);
+            return;
+          }
+
+          setBundleFound(true);
+          setBundle({
+            bundle_id: payload?.bundle_id,
+            active_until: payload?.active_until,
+            orders: Array.isArray(payload?.orders) ? payload.orders : []
+          });
+          setLoading(false);
+        })
+        .catch((requestError) => {
+          if (!mounted) {
+            return;
+          }
+          if (attempt === 0) {
+            setTimeout(() => {
+              if (mounted) {
+                fetchBundle(1);
+              }
+            }, 1500);
+            return;
+          }
+          setError(requestError.message || "Unable to load bundle details.");
+        })
+        .finally(() => {
+          if (!mounted) {
+            return;
+          }
+          if (attempt === 1) {
+            setLoading(false);
+          }
         });
-      })
-      .catch((requestError) => {
-        if (!mounted) {
-          return;
-        }
-        setError(requestError.message || "Unable to load bundle details.");
-      })
-      .finally(() => {
-        if (!mounted) {
-          return;
-        }
-        setLoading(false);
-      });
+    };
+
+    fetchBundle(0);
 
     return () => {
       mounted = false;
     };
-  }, [token]);
+  }, [token, queryBundleId, queryEmail]);
 
   const remaining = useMemo(
     () => formatRemaining(bundle?.active_until, nowMs),
@@ -560,12 +608,17 @@ export default function PublicBundlePage() {
 
       <section className="public-bundle-hero">
         <p className="marketing-eyebrow">Bundle progress</p>
-        <h1>Your BundleCart window is open</h1>
+        <h1>
+          {bundleFound === false
+            ? "No active BundleCart found for this link"
+            : "Your BundleCart window is open"}
+        </h1>
         <p className="public-bundle-subtext">
-          You've unlocked 72 hours of free BundleCart shipping. Keep shopping and add more orders
-          before your window closes.
+          {bundleFound === false
+            ? "Try placing a new order to start a BundleCart shipping window."
+            : "You've unlocked 72 hours of free BundleCart shipping. Keep shopping and add more orders before your window closes."}
         </p>
-        {!loading && !error && bundle ? (
+        {!loading && !error && bundleFound !== false && bundle ? (
           <>
             <p
               className={`public-bundle-countdown ${remaining.closed ? "public-bundle-countdown-closed" : ""}`}
@@ -589,7 +642,19 @@ export default function PublicBundlePage() {
       {loading ? <p>Loading your bundle...</p> : null}
       {!loading && error ? <p className="inline-error">{error}</p> : null}
 
-      {!loading && !error && bundle ? (
+      {!loading && !error && bundleFound === false ? (
+        <section className="public-bundle-section">
+          <div className="public-bundle-section-header">
+            <h2>No active BundleCart found for this link</h2>
+          </div>
+          <p className="public-bundle-subtle">Try placing a new order to start a bundle.</p>
+          <a href="/" className="marketing-btn marketing-btn-primary">
+            Start a new bundle
+          </a>
+        </section>
+      ) : null}
+
+      {!loading && !error && bundleFound !== false && bundle ? (
         <>
           <section className="public-bundle-section">
             <div className="public-bundle-section-header">

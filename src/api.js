@@ -62,7 +62,27 @@ export const api = {
   getCustomerInsights: (signal) => request("/customers/insights", { signal }),
   getMerchantDashboard: (shop) =>
     request(`/merchant/dashboard?shop=${encodeURIComponent(String(shop || "").trim())}`),
-  getPublicBundle: (token) => request(`/bundle/${encodeURIComponent(String(token || "").trim())}`),
+  getPublicBundle: (input) => {
+    const token =
+      typeof input === "string" ? String(input || "").trim() : String(input?.token || "").trim();
+    if (token) {
+      return request(`/bundle/${encodeURIComponent(token)}`);
+    }
+
+    const bundleId = String(input?.bundleId || "").trim();
+    const email = String(input?.email || "")
+      .trim()
+      .toLowerCase();
+    const params = new URLSearchParams();
+    if (bundleId) {
+      params.set("bundleId", bundleId);
+    }
+    if (email) {
+      params.set("email", email);
+    }
+    const query = params.toString();
+    return request(`/bundle${query ? `?${query}` : ""}`);
+  },
   getAdminBundles: () => requestDashboard("/admin/bundles"),
   getAdminReadyBundles: () => requestDashboard("/admin/bundles/ready"),
   getAdminBundleDetail: (bundleId) => requestDashboard(`/admin/bundles/${bundleId}`)
