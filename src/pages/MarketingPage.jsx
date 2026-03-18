@@ -186,6 +186,23 @@ export default function MarketingPage() {
 
   return (
     <div className="marketing-page">
+      <header className="marketing-header">
+        <div className="marketing-header-inner">
+          <div className="marketing-logo">
+            <img src="/logo.png" alt="BundleCart" />
+            <span>BundleCart</span>
+          </div>
+          <button
+            type="button"
+            className="marketing-btn marketing-btn-primary marketing-cta"
+            onClick={openInstallModal}
+            title="Install BundleCart"
+          >
+            Install BundleCart
+          </button>
+        </div>
+      </header>
+
       <section className="marketing-hero">
         <div className="marketing-hero-content">
           <div>

@@ -116,8 +116,14 @@ export default function MerchantDashboardPage() {
 
   return (
     <div className="page">
-      <div className="page-header">
-        <h3>Store Performance Dashboard</h3>
+      <div className="page-header merchant-dashboard-header">
+        <div className="merchant-dashboard-brand">
+          <img src="/logo.png" alt="BundleCart" />
+          <div>
+            <h3>BundleCart</h3>
+            <p className="subtle">Store Performance Dashboard</p>
+          </div>
+        </div>
       </div>
 
       {shop ? <p className="subtle">Store: {shop}</p> : null}

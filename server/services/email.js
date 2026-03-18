@@ -66,8 +66,11 @@ function buildEmailLayout({
   urgencyText,
   secondaryCopy
 }) {
-  const fallbackCtaUrl = String(process.env.APP_URL || "https://bundle-cart.replit.app").trim();
+  const appUrlBase = String(process.env.APP_URL || "https://bundle-cart.replit.app").trim();
+  const fallbackCtaUrl = appUrlBase;
   const resolvedCtaUrl = String(ctaUrl || fallbackCtaUrl).trim();
+  const resolvedAppUrl = appUrlBase.replace(/\/+$/, "");
+  const safeLogoUrl = escapeHtml(`${resolvedAppUrl}/logo.png`);
   const safeHeadline = escapeHtml(headline);
   const safeSubtext = escapeHtml(subtext);
   const safeOrderCount = String(Number.isFinite(orderCount) ? orderCount : 0);
@@ -86,7 +89,7 @@ function buildEmailLayout({
         <tr>
           <td align="center" style="padding:24px 28px 18px 28px;font-family:Arial,sans-serif;">
             <div style="text-align:center;margin-bottom:20px;">
-              <img src="https://bundlecart.app/logo.png" alt="BundleCart" width="120" style="display:block;margin:0 auto;border:0;outline:none;text-decoration:none;" />
+              <img src="${safeLogoUrl}" alt="BundleCart" width="120" style="display:block;margin:0 auto;border:0;outline:none;text-decoration:none;" />
               <h2 style="margin:10px 0 0;color:#5b21b6;font-size:28px;line-height:34px;font-weight:700;font-family:Arial,sans-serif;">BundleCart</h2>
               <p style="margin:4px 0 0;color:#6b7280;font-size:14px;line-height:20px;font-family:Arial,sans-serif;">Pay shipping once. Add more orders.</p>
             </div>
