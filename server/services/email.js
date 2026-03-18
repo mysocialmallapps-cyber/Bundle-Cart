@@ -8,11 +8,12 @@ const EMAIL_PROVIDER = String(
 const RESEND_API_KEY = String(
   process.env.RESEND_API_KEY || process.env.BUNDLECART_EMAIL_API_KEY || ""
 ).trim();
-const EMAIL_FROM = process.env.EMAIL_FROM || "BundleCart <noreply@mail.bundlecart.app>";
+const EMAIL_FROM = "BundleCart <noreply@mail.bundlecart.app>";
 
 let resendClient = null;
 let providerConfiguredLogged = false;
-const BUNDLECART_BRAND_PURPLE = "#6C4CF5";
+const BUNDLECART_BRAND_PURPLE = "#6d28d9";
+const BUNDLECART_BRAND_INDIGO = "#4f46e5";
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -74,50 +75,56 @@ function buildEmailLayout({
   const safeTimeLeft = escapeHtml(formatTimeLeft(activeUntil));
   const safeCtaText = escapeHtml(ctaText);
   const safeCtaUrl = escapeHtml(resolvedCtaUrl);
-  const safeUrgencyText = escapeHtml(urgencyText || `Only ${formatTimeLeft(activeUntil)} left to add more orders.`);
+  const safeUrgencyText = escapeHtml(urgencyText || "Your bundle closes soon - do not miss free shipping.");
   const safeSecondaryCopy = escapeHtml(secondaryCopy || "");
 
   return `
-<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background-color:#F4F1FF;margin:0;padding:24px 0;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background-color:#F5F3FF;margin:0;padding:24px 0;">
   <tr>
     <td align="center" style="padding:0 12px;">
-      <table role="presentation" width="620" cellspacing="0" cellpadding="0" border="0" style="width:620px;max-width:620px;background-color:#ffffff;border:1px solid #E8E1FF;border-radius:16px;overflow:hidden;">
+      <table role="presentation" width="620" cellspacing="0" cellpadding="0" border="0" style="width:620px;max-width:620px;background-color:#ffffff;border:1px solid #E9DDFC;border-radius:16px;overflow:hidden;box-shadow:0 12px 28px rgba(76,29,149,0.14);">
         <tr>
-          <td style="padding:20px 28px 16px 28px;font-family:Arial,sans-serif;font-size:22px;line-height:28px;font-weight:700;color:${BUNDLECART_BRAND_PURPLE};">
-            BundleCart
+          <td align="center" style="padding:24px 28px 18px 28px;font-family:Arial,sans-serif;">
+            <div style="text-align:center;margin-bottom:20px;">
+              <img src="https://bundlecart.app/logo.png" alt="BundleCart" width="120" style="display:block;margin:0 auto;border:0;outline:none;text-decoration:none;" />
+              <h2 style="margin:10px 0 0;color:#5b21b6;font-size:28px;line-height:34px;font-weight:700;font-family:Arial,sans-serif;">BundleCart</h2>
+              <p style="margin:4px 0 0;color:#6b7280;font-size:14px;line-height:20px;font-family:Arial,sans-serif;">Pay shipping once. Add more orders.</p>
+            </div>
           </td>
         </tr>
         <tr>
           <td style="padding:0 28px;">
-            <div style="height:1px;background:#ECE8FF;"></div>
+            <div style="height:1px;background:#EDE9FE;"></div>
           </td>
         </tr>
         <tr>
           <td style="padding:24px 28px 0 28px;font-family:Arial,sans-serif;">
-            <div style="font-size:28px;line-height:34px;font-weight:700;color:#1B1640;">${safeHeadline}</div>
-            <div style="margin-top:10px;font-size:16px;line-height:24px;color:#433E69;">
+            <div style="font-size:29px;line-height:36px;font-weight:700;color:#1E1B4B;">${safeHeadline}</div>
+            <div style="margin-top:10px;font-size:16px;line-height:24px;color:#433B68;">
               ${safeSubtext}
             </div>
           </td>
         </tr>
         <tr>
           <td style="padding:20px 28px 0 28px;">
-            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#F7F5FF;border:1px solid #E7E0FF;border-radius:12px;">
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#FAF7FF;border:1px solid #E6DCFC;border-radius:14px;">
               <tr>
                 <td style="padding:16px 18px;font-family:Arial,sans-serif;">
-                  <div style="font-size:13px;color:#5A5587;line-height:18px;">Time left</div>
-                  <div style="margin-top:3px;font-size:24px;line-height:30px;font-weight:700;color:${BUNDLECART_BRAND_PURPLE};">Time left: ${safeTimeLeft}</div>
-                  <div style="margin-top:10px;font-size:14px;line-height:20px;color:#2D2759;"><strong>Expires:</strong> ${safeExpiry}</div>
-                  <div style="margin-top:6px;font-size:14px;line-height:20px;color:#2D2759;"><strong>Orders in bundle:</strong> ${safeOrderCount}</div>
-                  <div style="margin-top:10px;font-size:14px;line-height:20px;color:#433E69;">You've unlocked 72 hours of free BundleCart shipping. Keep shopping and add more orders before your window closes.</div>
+                  <div style="font-size:13px;color:#625b87;line-height:18px;font-weight:600;">Bundle progress</div>
+                  <div style="margin-top:6px;font-size:27px;line-height:34px;font-weight:800;color:${BUNDLECART_BRAND_PURPLE};">⏳ ${safeTimeLeft} left to add more orders</div>
+                  <div style="margin-top:10px;font-size:14px;line-height:20px;color:#2E2A52;"><strong>Expires:</strong> ${safeExpiry}</div>
+                  <div style="margin-top:6px;font-size:14px;line-height:20px;color:#2E2A52;"><strong>Orders in bundle:</strong> ${safeOrderCount}</div>
+                  <div style="margin-top:10px;font-size:14px;line-height:20px;color:#433B68;">You've unlocked 72 hours of free BundleCart shipping. Keep shopping and add more orders before your window closes.</div>
                 </td>
               </tr>
             </table>
           </td>
         </tr>
         <tr>
-          <td align="center" style="padding:24px 28px 0 28px;">
-            <a href="${safeCtaUrl}" style="display:inline-block;background:${BUNDLECART_BRAND_PURPLE};color:#ffffff;text-decoration:none;font-family:Arial,sans-serif;font-size:17px;line-height:22px;font-weight:700;padding:14px 28px;border-radius:10px;">${safeCtaText}</a>
+          <td style="padding:24px 28px 0 28px;">
+            <a href="${safeCtaUrl}" style="display:block;width:100%;background:linear-gradient(135deg, ${BUNDLECART_BRAND_PURPLE} 0%, ${BUNDLECART_BRAND_INDIGO} 100%);color:#ffffff;text-decoration:none;text-align:center;font-family:Arial,sans-serif;font-size:17px;line-height:22px;font-weight:700;padding:15px 18px;border-radius:12px;box-sizing:border-box;">
+              ${safeCtaText}
+            </a>
           </td>
         </tr>
         <tr>
@@ -133,10 +140,13 @@ function buildEmailLayout({
         </tr>
         <tr>
           <td style="padding:14px 28px 0 28px;">
-            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#FFF5F5;border:1px solid #FFD8DD;border-radius:10px;">
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#F3E8FF;border:1px solid #DDD6FE;border-radius:12px;">
               <tr>
-                <td style="padding:12px 14px;font-family:Arial,sans-serif;font-size:14px;line-height:20px;color:#9A2640;font-weight:700;">
-                  ${safeUrgencyText}
+                <td style="padding:14px 15px;font-family:Arial,sans-serif;">
+                  <div style="font-size:16px;line-height:22px;color:#4C1D95;font-weight:800;">⏳ ${safeTimeLeft} left to add more orders</div>
+                  <div style="margin-top:6px;font-size:14px;line-height:20px;color:#5B21B6;font-weight:700;">
+                    ${safeUrgencyText}
+                  </div>
                 </td>
               </tr>
             </table>
@@ -144,7 +154,7 @@ function buildEmailLayout({
         </tr>
         <tr>
           <td style="padding:22px 28px 26px 28px;font-family:Arial,sans-serif;font-size:12px;line-height:19px;color:#706A99;">
-            BundleCart is a network shipping layer that helps you pay shipping once, then keep adding orders with free BundleCart shipping during your active window.
+            BundleCart helps shoppers pay shipping once, then keep adding orders during a 72-hour window with free BundleCart shipping.
           </td>
         </tr>
       </table>
@@ -180,7 +190,7 @@ export function buildBundleOrderAddedEmailTemplate({ activeUntil, orderCount, bu
         "Great news - your bundle keeps growing. Keep going while your shipping window stays open.",
       activeUntil,
       orderCount,
-      ctaText: "View your bundle",
+      ctaText: "Continue shopping",
       ctaUrl: bundleUrl,
       secondaryCopy:
         "You can still add more orders from participating stores with free BundleCart shipping during this same window.",
@@ -216,7 +226,7 @@ export function buildBundleExpiredEmailTemplate({ activeUntil, orderCount, bundl
         "Your current bundle window ended. You can start a new bundle the next time you check out with BundleCart.",
       activeUntil,
       orderCount,
-      ctaText: "Start a new bundle",
+      ctaText: "Continue shopping",
       ctaUrl: bundleUrl,
       secondaryCopy:
         "When you place your next BundleCart order, you'll open a new 72-hour window to link more orders.",
