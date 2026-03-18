@@ -20,18 +20,18 @@ const SHOPIFY_ADMIN_API_VERSION = "2026-01";
 const BUNDLECART_CARRIER_NAME = "BundleCart";
 const BUNDLECART_CALLBACK_URL = "https://bundle-cart.replit.app/api/shipping/rates";
 const BUNDLECART_PAID_RATE = {
-  service_name: "BundleCart",
+  service_name: "BundleCart — Pay $5, unlock FREE shipping for 72h 🌟",
   service_code: "BUNDLECART_PAID",
   total_price: "500",
   description:
-    "Pay shipping once. Add more orders in the next 72 hours with free BundleCart shipping."
+    "Save on multiple orders. Add more items in the next 72 hours and ship everything together for free."
 };
 const BUNDLECART_FREE_RATE = {
-  service_name: "BundleCart",
+  service_name: "BundleCart — FREE shipping unlocked 🎉",
   service_code: "BUNDLECART_FREE",
   total_price: "0",
   description:
-    "Your active BundleCart window is open. Linked orders in the next 72 hours ship free together."
+    "⏳ You have 72 hours to add more items. All additional orders ship for FREE."
 };
 const BUNDLECART_EMAIL_WORKER_INTERVAL_MS = 10 * 60 * 1000;
 const BUNDLECART_EMAIL_WORKER_BATCH_LIMIT = 100;
