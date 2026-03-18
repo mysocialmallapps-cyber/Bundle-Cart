@@ -188,10 +188,10 @@ export default function MarketingPage() {
     <div className="marketing-page">
       <header className="marketing-header">
         <div className="marketing-header-inner">
-          <div className="marketing-logo">
+          <a href="/" className="marketing-logo" aria-label="BundleCart home">
             <img src="/logo.png" alt="BundleCart" />
             <span>BundleCart</span>
-          </div>
+          </a>
           <button
             type="button"
             className="marketing-btn marketing-btn-primary marketing-cta"

@@ -435,6 +435,7 @@ input:focus {
   gap: 8px;
   font-weight: 600;
   color: #5b21b6;
+  text-decoration: none;
 }
 
 .marketing-logo img {
