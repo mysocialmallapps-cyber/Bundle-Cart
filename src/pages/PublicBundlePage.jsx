@@ -554,9 +554,7 @@ export default function PublicBundlePage() {
   return (
     <div className="public-bundle-page">
       <div className="public-bundle-brand">
-        <span className="brand-logo-badge">
-          <img src="/logo.png" alt="BundleCart" />
-        </span>
+        <img src="/logo.png" alt="BundleCart" />
         <span>BundleCart</span>
       </div>
 

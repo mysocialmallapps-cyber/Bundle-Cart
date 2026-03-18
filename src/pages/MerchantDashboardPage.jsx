@@ -118,9 +118,7 @@ export default function MerchantDashboardPage() {
     <div className="page">
       <div className="page-header merchant-dashboard-header">
         <div className="merchant-dashboard-brand">
-          <span className="brand-logo-badge">
-            <img src="/logo.png" alt="BundleCart" />
-          </span>
+          <img src="/logo.png" alt="BundleCart" />
           <div>
             <h3>BundleCart</h3>
             <p className="subtle">Store Performance Dashboard</p>

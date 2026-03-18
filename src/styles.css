@@ -432,30 +432,17 @@ input:focus {
 .marketing-logo {
   display: flex;
   align-items: center;
-  gap: 11px;
+  gap: 10px;
   font-weight: 700;
   font-size: 1.18rem;
   color: #5b21b6;
   text-decoration: none;
 }
 
-.brand-logo-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 46px;
-  height: 46px;
-  background: #f3f4f6;
-  border-radius: 10px;
-  overflow: hidden;
-}
-
-.brand-logo-badge img {
-  width: 46px;
-  height: 46px;
+.marketing-logo img {
+  width: 44px;
+  height: 44px;
   object-fit: contain;
-  transform: scale(1.24);
-  transform-origin: center;
 }
 
 .marketing-cta {
@@ -906,6 +893,12 @@ input:focus {
   letter-spacing: 0.01em;
 }
 
+.public-bundle-brand img {
+  width: 44px;
+  height: 44px;
+  object-fit: contain;
+}
+
 .public-bundle-hero {
   background:
     radial-gradient(circle at 15% 15%, rgba(136, 101, 255, 0.24), transparent 48%),
@@ -1164,6 +1157,12 @@ input:focus {
   gap: 12px;
 }
 
+.merchant-dashboard-brand img {
+  width: 44px;
+  height: 44px;
+  object-fit: contain;
+}
+
 .merchant-dashboard-brand h3 {
   margin: 0;
   color: #5b21b6;
@@ -1254,11 +1253,9 @@ input:focus {
   .marketing-logo {
     justify-content: center;
   }
-  .brand-logo-badge {
-    width: 42px;
-    height: 42px;
-  }
-  .brand-logo-badge img {
+  .marketing-logo img,
+  .public-bundle-brand img,
+  .merchant-dashboard-brand img {
     width: 42px;
     height: 42px;
   }

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">BundleCart logo</title>
+  <desc id="desc">Purple shopping cart icon with a white letter B</desc>
+
+  <path d="M168 126H468L430 320H234L168 126Z" fill="#6d28d9"/>
+  <path d="M70 108H150L236 355H392" fill="none" stroke="#6d28d9" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="268" cy="422" r="34" fill="#6d28d9"/>
+  <circle cx="370" cy="422" r="34" fill="#6d28d9"/>
+  <text x="332" y="246" fill="#ffffff" font-family="Inter, Arial, Helvetica, sans-serif" font-size="170" font-weight="800" text-anchor="middle" dominant-baseline="middle">B</text>
+</svg>
