@@ -1076,6 +1076,18 @@ input:focus {
   line-height: 1.45;
 }
 
+.public-bundle-discovery-badge {
+  justify-self: start;
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: #efe8ff;
+  border: 1px solid #dccfff;
+  color: #4d31bf;
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
 .public-bundle-discovery-card .marketing-btn {
   justify-self: start;
 }
