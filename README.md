@@ -95,3 +95,13 @@ Set the webhook signing secret in **Replit Deployment Secrets**:
 
 - Key: `SHOPIFY_WEBHOOK_SECRET`
 - Value: your Shopify webhook signing secret (same secret used to sign `X-Shopify-Hmac-Sha256`)
+
+## Email trust (DMARC + BIMI readiness)
+
+Use this DMARC TXT record for your sending domain:
+
+- Host/Name: `_dmarc.bundlecart.app`
+- Type: `TXT`
+- Value: `v=DMARC1; p=quarantine; adkim=s; aspf=s; pct=100; rua=mailto:dmarc@bundlecart.app`
+
+This keeps the record valid while moving policy from `p=none` to `p=quarantine` to improve trust and support BIMI prerequisites.
