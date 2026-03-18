@@ -67,7 +67,7 @@ function buildEmailLayout({
   secondaryCopy
 }) {
   const appUrlBase = String(process.env.APP_URL || "https://bundle-cart.replit.app").trim();
-  const fallbackCtaUrl = appUrlBase;
+  const fallbackCtaUrl = `${appUrlBase.replace(/\/+$/, "")}/bundle?bundleId=&email=`;
   const resolvedCtaUrl = String(ctaUrl || fallbackCtaUrl).trim();
   const resolvedAppUrl = appUrlBase.replace(/\/+$/, "");
   const safeLogoUrl = escapeHtml(`${resolvedAppUrl}/logo.png`);
