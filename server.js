@@ -3805,18 +3805,8 @@ export function createApp() {
     res.sendFile(path.join(DIST_PATH, "index.html"));
   });
 
-  app.get("/", async (req, res) => {
-    const accessCheck = await enforceBundlecartBillingAccess(req, res, { allowMissingShop: true });
-    if (!accessCheck.allowed) {
-      return;
-    }
-    if (!accessCheck.shop) {
-      res.status(200).send("ok");
-      return;
-    }
-    const shop = accessCheck.shop;
-    console.log("APP ROOT AUTHORIZED", shop);
-    res.redirect(`/dashboard?shop=${encodeURIComponent(shop)}`);
+  app.get("/", (_req, res) => {
+    res.sendFile(path.join(DIST_PATH, "index.html"));
   });
 
   app.use(express.static(DIST_PATH));
