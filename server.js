@@ -310,7 +310,7 @@ LIMIT 1;
 `;
 
 const SELECT_ACTIVE_BUNDLE_GROUP_BY_ADDRESS_SQL = `
-SELECT lg.id, lg.email, lg.active_until
+SELECT lg.id, lg.email, lg.active_until, lg.address_hash
 FROM link_groups lg
 WHERE lg.address_hash = $1::text
   AND lg.active_until > NOW()
@@ -319,11 +319,20 @@ LIMIT 1;
 `;
 
 const SELECT_LATEST_BUNDLE_GROUP_BY_ADDRESS_SQL = `
-SELECT lg.id, lg.email, lg.active_until
+SELECT lg.id, lg.email, lg.active_until, lg.address_hash
 FROM link_groups lg
 WHERE lg.address_hash = $1::text
 ORDER BY COALESCE(lg.active_until, lg.created_at) DESC
 LIMIT 1;
+`;
+
+const SELECT_RECENT_ACTIVE_BUNDLE_HASHES_SQL = `
+SELECT address_hash
+FROM link_groups
+WHERE active_until > NOW()
+  AND address_hash IS NOT NULL
+ORDER BY active_until DESC
+LIMIT $1::integer;
 `;
 
 const SELECT_ADDRESS_MISMATCH_ACTIVE_GROUP_SQL = `
@@ -1066,17 +1075,38 @@ function normalizeProvinceCode(value) {
 }
 
 function buildCanonicalAddress(address) {
-  const input = address && typeof address === "object" ? address : {};
-  const address1 = normalizeAddressValue(input.address1);
-  const address2 = normalizeAddressValue(input.address2);
-  const city = normalizeAddressValue(input.city);
-  const province = normalizeProvinceCode(input.province_code || input.province);
-  const postalCode = normalizeAddressValue(input.zip || input.postal_code);
-  const country = normalizeCountryCode(input.country_code || input.country);
-
+  const normalized = normalizeAddress(address);
   return {
-    canonical: [address1, address2, city, province, postalCode, country].join("|"),
-    hasRequired: Boolean(address1 && city && postalCode && country)
+    normalized,
+    canonical: [
+      normalized.address1,
+      normalized.city,
+      normalized.province,
+      normalized.postal_code,
+      normalized.country
+    ].join("|"),
+    hasRequired: Boolean(
+      normalized.address1 && normalized.city && normalized.postal_code && normalized.country
+    )
+  };
+}
+
+function normalizeAddress(addr) {
+  const input = addr && typeof addr === "object" ? addr : {};
+  return {
+    address1: String(input.address1 || "")
+      .trim()
+      .toLowerCase(),
+    city: String(input.city || "")
+      .trim()
+      .toLowerCase(),
+    province: String(input.province_code || input.province || "")
+      .trim()
+      .toLowerCase(),
+    postal_code: String(input.postal_code || input.zip || "").trim(),
+    country: String(input.country_code || input.country || "")
+      .trim()
+      .toLowerCase()
   };
 }
 
@@ -2834,9 +2864,15 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
   const totalPrice = order.total_price != null ? String(order.total_price) : null;
   const paidAtTimestamp = createdAt || new Date().toISOString();
   const shippingAddress = getOrderShippingAddress(order);
-  const { canonical: canonicalAddress, hasRequired: hasRequiredAddress } = buildCanonicalAddress(shippingAddress);
+  const {
+    normalized: normalizedAddress,
+    canonical: canonicalAddress,
+    hasRequired: hasRequiredAddress
+  } = buildCanonicalAddress(shippingAddress);
   const addressHash = hasRequiredAddress ? hashAddressCanonical(canonicalAddress) : "";
   console.log("BUNDLECART WEBHOOK CANONICAL ADDRESS", canonicalAddress);
+  console.log("BUNDLECART NORMALIZED ADDRESS", normalizedAddress);
+  console.log("BUNDLECART ADDRESS HASH", addressHash || "");
   const bundleCartSelection = extractBundleCartSelection(order);
   const bundlecartSelected = bundleCartSelection.selected;
   const bundlecartFeeAmount = Number(bundleCartSelection.amount || 0);
@@ -2884,6 +2920,11 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
       if (activeGroupResult.rowCount > 0) {
         existingWindowFound = true;
         groupId = activeGroupResult.rows[0].id;
+        console.log("BUNDLECART EXISTING HASH", activeGroupResult.rows[0].address_hash || "");
+        console.log(
+          "BUNDLECART MATCH RESULT",
+          String(activeGroupResult.rows[0].address_hash || "") === String(addressHash || "")
+        );
         console.log("BUNDLECART EXISTING BUNDLE WINDOW FOUND", groupId);
         console.log("BUNDLECART ORDER LINKED TO EXISTING GROUP", orderId, groupId);
         console.log("BUNDLECART NETWORK LINKED ORDER FREE");
@@ -2894,6 +2935,15 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
         ]);
         console.log("BUNDLECART CUSTOMER ADDRESS STORED");
       } else {
+        if (email) {
+          const activeHashesForEmailResult = await dbPool.query(SELECT_ACTIVE_GROUPS_FOR_EMAIL_DEBUG_SQL, [
+            email
+          ]);
+          for (const row of activeHashesForEmailResult.rows) {
+            console.log("BUNDLECART EXISTING HASH", row.address_hash || "");
+          }
+        }
+        console.log("BUNDLECART MATCH RESULT", false);
         const latestGroupResult = await dbPool.query(SELECT_LATEST_BUNDLE_GROUP_BY_ADDRESS_SQL, [
           addressHash
         ]);
@@ -3148,9 +3198,11 @@ export function createApp() {
         const rate = parsedPayload?.rate && typeof parsedPayload.rate === "object" ? parsedPayload.rate : {};
         const destination = rate.destination && typeof rate.destination === "object" ? rate.destination : {};
         console.log("BUNDLECART RATE RAW", JSON.stringify(rate || {}));
-        const { canonical, hasRequired } = buildCanonicalAddress(destination);
+        const { normalized, canonical, hasRequired } = buildCanonicalAddress(destination);
         const addressHash = hasRequired ? hashAddressCanonical(canonical) : "";
         console.log("BUNDLECART RATE CANONICAL ADDRESS", canonical);
+        console.log("BUNDLECART NORMALIZED ADDRESS", normalized);
+        console.log("BUNDLECART ADDRESS HASH", addressHash || "");
         const currency = destination.currency || rate.currency || "USD";
         console.log("BUNDLECART RATE ADDRESS INPUT", JSON.stringify(destination || {}));
         console.log("BUNDLECART RATE ADDRESS HASH", addressHash || "");
@@ -3170,12 +3222,23 @@ export function createApp() {
         ]);
         if (activeGroupResult.rowCount > 0) {
           const activeGroupId = activeGroupResult.rows[0].id;
+          console.log("BUNDLECART EXISTING HASH", activeGroupResult.rows[0].address_hash || "");
+          console.log(
+            "BUNDLECART MATCH RESULT",
+            String(activeGroupResult.rows[0].address_hash || "") === String(addressHash || "")
+          );
           console.log("BUNDLECART EXISTING BUNDLE WINDOW FOUND", activeGroupId);
           console.log("BUNDLECART NETWORK LINKED ORDER FREE");
           return res
             .status(200)
             .json(buildBundleCartRateResponse({ eligibleFree: true, currency }));
         }
+
+        const recentHashesResult = await dbPool.query(SELECT_RECENT_ACTIVE_BUNDLE_HASHES_SQL, [5]);
+        for (const row of recentHashesResult.rows) {
+          console.log("BUNDLECART EXISTING HASH", row.address_hash || "");
+        }
+        console.log("BUNDLECART MATCH RESULT", false);
 
         const latestGroupResult = await dbPool.query(SELECT_LATEST_BUNDLE_GROUP_BY_ADDRESS_SQL, [
           addressHash
