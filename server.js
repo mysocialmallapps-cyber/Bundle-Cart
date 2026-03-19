@@ -1112,24 +1112,163 @@ ORDER BY created_at DESC NULLS LAST
 LIMIT 200;
 `;
 
-function timingSafeCompare(left, right) {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
+function getWebhookSecretCandidates() {
+  const candidates = [
+    {
+      source: "SHOPIFY_WEBHOOK_SECRET",
+      value: String(process.env.SHOPIFY_WEBHOOK_SECRET || "").trim()
+    },
+    {
+      source: "SHOPIFY_API_SECRET",
+      value: String(process.env.SHOPIFY_API_SECRET || "").trim()
+    }
+  ].filter((candidate) => candidate.value);
 
-  if (leftBuffer.length !== rightBuffer.length) {
-    return false;
+  const seen = new Set();
+  const deduped = [];
+  for (const candidate of candidates) {
+    if (seen.has(candidate.value)) {
+      continue;
+    }
+    seen.add(candidate.value);
+    deduped.push(candidate);
+  }
+  return deduped;
+}
+
+function toRawWebhookBodyBuffer(rawBody) {
+  if (Buffer.isBuffer(rawBody)) {
+    return rawBody;
+  }
+  if (rawBody instanceof Uint8Array) {
+    return Buffer.from(rawBody);
+  }
+  return null;
+}
+
+function safeBase64ToBuffer(value) {
+  const input = String(value || "").trim();
+  if (!input) {
+    return null;
+  }
+  try {
+    const decoded = Buffer.from(input, "base64");
+    if (!decoded.length) {
+      return null;
+    }
+    // Guard against invalid base64 quietly decoding to garbage.
+    const normalizedInput = input.replace(/=+$/g, "");
+    const normalizedDecoded = decoded.toString("base64").replace(/=+$/g, "");
+    if (normalizedInput !== normalizedDecoded) {
+      return null;
+    }
+    return decoded;
+  } catch {
+    return null;
+  }
+}
+
+function verifyShopifyWebhookSignature({ rawBody, signature, secretCandidates }) {
+  const rawBodyBuffer = toRawWebhookBodyBuffer(rawBody);
+  const trimmedSignature = String(signature || "").trim();
+  const signatureBytes = safeBase64ToBuffer(trimmedSignature);
+  const candidates = Array.isArray(secretCandidates) ? secretCandidates : [];
+
+  if (!rawBodyBuffer || rawBodyBuffer.length === 0) {
+    return {
+      ok: false,
+      reason: "raw_body_missing",
+      rawBodyPresent: false,
+      rawBodyBytes: 0,
+      hmacHeaderPresent: Boolean(trimmedSignature),
+      candidateCount: candidates.length,
+      matchedSecretSource: ""
+    };
+  }
+  if (!trimmedSignature) {
+    return {
+      ok: false,
+      reason: "hmac_header_missing",
+      rawBodyPresent: true,
+      rawBodyBytes: rawBodyBuffer.length,
+      hmacHeaderPresent: false,
+      candidateCount: candidates.length,
+      matchedSecretSource: ""
+    };
+  }
+  if (!signatureBytes) {
+    return {
+      ok: false,
+      reason: "hmac_header_invalid_base64",
+      rawBodyPresent: true,
+      rawBodyBytes: rawBodyBuffer.length,
+      hmacHeaderPresent: true,
+      candidateCount: candidates.length,
+      matchedSecretSource: ""
+    };
+  }
+  if (candidates.length === 0) {
+    return {
+      ok: false,
+      reason: "webhook_secret_missing",
+      rawBodyPresent: true,
+      rawBodyBytes: rawBodyBuffer.length,
+      hmacHeaderPresent: true,
+      candidateCount: 0,
+      matchedSecretSource: ""
+    };
   }
 
-  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
+  for (const candidate of candidates) {
+    const expectedBytes = crypto
+      .createHmac("sha256", candidate.value)
+      .update(rawBodyBuffer)
+      .digest();
+    if (expectedBytes.length !== signatureBytes.length) {
+      continue;
+    }
+    if (crypto.timingSafeEqual(signatureBytes, expectedBytes)) {
+      return {
+        ok: true,
+        reason: "match",
+        rawBodyPresent: true,
+        rawBodyBytes: rawBodyBuffer.length,
+        hmacHeaderPresent: true,
+        candidateCount: candidates.length,
+        matchedSecretSource: candidate.source
+      };
+    }
+  }
+
+  return {
+    ok: false,
+    reason: "digest_mismatch",
+    rawBodyPresent: true,
+    rawBodyBytes: rawBodyBuffer.length,
+    hmacHeaderPresent: true,
+    candidateCount: candidates.length,
+    matchedSecretSource: ""
+  };
 }
 
 export function isValidShopifyWebhookSignature(rawBody, signature, secret) {
-  if (!Buffer.isBuffer(rawBody) || !signature || !secret) {
-    return false;
-  }
-
-  const expected = crypto.createHmac("sha256", secret).update(rawBody).digest("base64");
-  return timingSafeCompare(signature.trim(), expected);
+  const providedSecret = Array.isArray(secret)
+    ? secret.map((value, index) => ({
+        source: `provided_${index + 1}`,
+        value: String(value || "").trim()
+      }))
+    : [
+        {
+          source: "provided",
+          value: String(secret || "").trim()
+        }
+      ];
+  const verification = verifyShopifyWebhookSignature({
+    rawBody,
+    signature,
+    secretCandidates: providedSecret.filter((candidate) => candidate.value)
+  });
+  return verification.ok;
 }
 
 function normalizeShopDomain(input) {
@@ -4114,19 +4253,40 @@ export function createApp() {
   app.post("/api/webhooks/orders-create", (req, res) => {
     try {
       console.log("WEBHOOK HIT");
-      console.log(
-        "WEBHOOK HEADERS",
-        req.headers["x-shopify-hmac-sha256"] || req.headers["X-Shopify-Hmac-Sha256"],
-        "len",
-        req.body?.length
-      );
-
       const hmacSignature =
         req.get("X-Shopify-Hmac-Sha256") || req.get("x-shopify-hmac-sha256") || "";
-      const secret = process.env.SHOPIFY_WEBHOOK_SECRET || "";
-
-      if (!isValidShopifyWebhookSignature(req.body, hmacSignature, secret)) {
-        console.log("WEBHOOK SIG FAIL");
+      const shopDomainHeader =
+        req.headers["x-shopify-shop-domain"] ||
+        req.headers["X-Shopify-Shop-Domain"];
+      const shopDomain = Array.isArray(shopDomainHeader)
+        ? String(shopDomainHeader[0] || "")
+        : String(shopDomainHeader || "");
+      const topic = String(
+        req.get("X-Shopify-Topic") || req.get("x-shopify-topic") || "orders/create"
+      ).trim();
+      const webhookSecretCandidates = getWebhookSecretCandidates();
+      const verification = verifyShopifyWebhookSignature({
+        rawBody: req.body,
+        signature: hmacSignature,
+        secretCandidates: webhookSecretCandidates
+      });
+      console.log("WEBHOOK SIG MATCH RESULT", {
+        shopDomain: normalizeShopDomain(shopDomain),
+        topic,
+        rawBodyPresent: verification.rawBodyPresent,
+        rawBodyBytes: verification.rawBodyBytes,
+        hmacHeaderPresent: verification.hmacHeaderPresent,
+        candidateCount: verification.candidateCount,
+        match: verification.ok,
+        matchedSecretSource: verification.matchedSecretSource || "",
+        reason: verification.reason
+      });
+      if (!verification.ok) {
+        console.log("WEBHOOK SIG FAIL", {
+          shopDomain: normalizeShopDomain(shopDomain),
+          topic,
+          reason: verification.reason
+        });
         res.status(401).json({ ok: false, error: "Invalid webhook signature" });
         return;
       }
@@ -4146,12 +4306,6 @@ export function createApp() {
         "BUNDLECART TOTAL SHIPPING LINES",
         (order.shipping_lines || []).length
       );
-      const shopDomainHeader =
-        req.headers["x-shopify-shop-domain"] ||
-        req.headers["X-Shopify-Shop-Domain"];
-      const shopDomain = Array.isArray(shopDomainHeader)
-        ? String(shopDomainHeader[0] || "")
-        : String(shopDomainHeader || "");
       const webhookId =
         req.get("X-Shopify-Webhook-Id") || req.get("x-shopify-webhook-id") || "";
 
