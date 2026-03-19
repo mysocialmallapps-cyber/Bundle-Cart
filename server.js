@@ -2583,6 +2583,124 @@ async function findMerchantAuthByShop(shopDomain) {
   }
 }
 
+async function resolveMerchantAppRoute({
+  shopDomain,
+  createIfMissing = true,
+  requestPath = ""
+} = {}) {
+  const shop = normalizeShopDomain(shopDomain);
+  console.log("BUNDLECART APP ACCESS CHECK", {
+    shop: shop || "",
+    path: requestPath,
+    createIfMissing
+  });
+
+  if (!shop) {
+    return {
+      shop: "",
+      merchantFound: false,
+      tokenPresent: false,
+      billingActive: false,
+      route: "auth_required",
+      authUrl: ""
+    };
+  }
+
+  if (!dbPool) {
+    console.log("BUNDLECART MERCHANT FOUND", { shop, merchantFound: false, tokenPresent: false });
+    console.log("BUNDLECART BILLING STATUS", { shop, billing: "missing" });
+    console.log("BUNDLECART ROUTE CHOSEN billing_required", { shop, path: requestPath });
+    return {
+      shop,
+      merchantFound: false,
+      tokenPresent: false,
+      billingActive: false,
+      route: "billing_required",
+      approvalUrl: "",
+      reason: "db_unavailable"
+    };
+  }
+
+  const merchantAuth = await findMerchantAuthByShop(shop);
+  console.log("BUNDLECART MERCHANT FOUND", {
+    shop,
+    merchantFound: merchantAuth.exists,
+    tokenPresent: merchantAuth.tokenPresent
+  });
+  if (!merchantAuth.exists || !merchantAuth.tokenPresent) {
+    console.log("BUNDLECART BILLING STATUS", { shop, billing: "missing" });
+    console.log("BUNDLECART ROUTE CHOSEN auth_required", { shop, path: requestPath });
+    return {
+      shop,
+      merchantFound: merchantAuth.exists,
+      tokenPresent: merchantAuth.tokenPresent,
+      billingActive: false,
+      route: "auth_required",
+      authUrl: `/auth?shop=${encodeURIComponent(shop)}`
+    };
+  }
+
+  const merchantResult = await dbPool.query(SELECT_MERCHANT_ACCESS_TOKEN_SQL, [shop]);
+  const accessToken = String(merchantResult.rows[0]?.access_token || "").trim();
+  if (!accessToken) {
+    console.log("BUNDLECART BILLING STATUS", { shop, billing: "missing" });
+    console.log("BUNDLECART ROUTE CHOSEN auth_required", { shop, path: requestPath });
+    return {
+      shop,
+      merchantFound: true,
+      tokenPresent: false,
+      billingActive: false,
+      route: "auth_required",
+      authUrl: `/auth?shop=${encodeURIComponent(shop)}`
+    };
+  }
+
+  const subscriptionMode = detectBundlecartSubscriptionMode();
+  if (!subscriptionMode.supportsManualUsageBilling) {
+    console.log("BUNDLECART BILLING STATUS", { shop, billing: "active", mode: "managed" });
+    console.log("BUNDLECART ROUTE CHOSEN dashboard", { shop, path: requestPath });
+    return {
+      shop,
+      merchantFound: true,
+      tokenPresent: true,
+      billingActive: true,
+      route: "dashboard",
+      mode: "managed"
+    };
+  }
+
+  const subscriptionResult = await ensureMerchantBillingSubscription({
+    shopDomain: shop,
+    accessToken,
+    createIfMissing
+  });
+
+  if (subscriptionResult?.active) {
+    console.log("BUNDLECART BILLING STATUS", { shop, billing: "active" });
+    console.log("BUNDLECART ROUTE CHOSEN dashboard", { shop, path: requestPath });
+    return {
+      shop,
+      merchantFound: true,
+      tokenPresent: true,
+      billingActive: true,
+      route: "dashboard"
+    };
+  }
+
+  const approvalUrl =
+    subscriptionResult?.confirmationUrl || `/billing/subscribe?shop=${encodeURIComponent(shop)}`;
+  console.log("BUNDLECART BILLING STATUS", { shop, billing: "missing" });
+  console.log("BUNDLECART ROUTE CHOSEN billing_required", { shop, path: requestPath });
+  return {
+    shop,
+    merchantFound: true,
+    tokenPresent: true,
+    billingActive: false,
+    route: "billing_required",
+    approvalUrl
+  };
+}
+
 async function enforceBundlecartBillingAccess(req, res, options = {}) {
   const { allowMissingShop = false } = options;
   const shop = normalizeShopDomain(req.query.shop);
@@ -2596,43 +2714,25 @@ async function enforceBundlecartBillingAccess(req, res, options = {}) {
     return { allowed: Boolean(allowMissingShop), shop: "" };
   }
 
-  if (!dbPool) {
-    res.status(503).send("Billing check unavailable");
-    return { allowed: false, shop };
-  }
-
-  const subscriptionMode = detectBundlecartSubscriptionMode();
-  if (!subscriptionMode.supportsManualUsageBilling) {
-    console.log("BUNDLECART BILLING ACTIVE", shop, "managed_mode");
-    return { allowed: true, shop };
-  }
-
-  const merchantAuth = await findMerchantAuthByShop(shop);
-  if (!merchantAuth.exists || !merchantAuth.tokenPresent) {
-    res.redirect(`/auth?shop=${encodeURIComponent(shop)}`);
-    return { allowed: false, shop };
-  }
-
-  const merchantResult = await dbPool.query(SELECT_MERCHANT_ACCESS_TOKEN_SQL, [shop]);
-  const accessToken = String(merchantResult.rows[0]?.access_token || "").trim();
-  if (!accessToken) {
-    res.redirect(`/auth?shop=${encodeURIComponent(shop)}`);
-    return { allowed: false, shop };
-  }
-
-  const subscriptionResult = await ensureMerchantBillingSubscription({
+  const routeState = await resolveMerchantAppRoute({
     shopDomain: shop,
-    accessToken,
-    createIfMissing: true
+    createIfMissing: true,
+    requestPath: req.path
   });
-
-  if (subscriptionResult?.active) {
+  if (routeState.route === "dashboard") {
     console.log("BUNDLECART BILLING ACTIVE", shop);
     return { allowed: true, shop };
   }
-
+  if (routeState.route === "auth_required") {
+    res.redirect(routeState.authUrl || `/auth?shop=${encodeURIComponent(shop)}`);
+    return { allowed: false, shop };
+  }
   const billingRedirectUrl =
-    subscriptionResult?.confirmationUrl || `/billing/subscribe?shop=${encodeURIComponent(shop)}`;
+    routeState.approvalUrl || `/billing/subscribe?shop=${encodeURIComponent(shop)}`;
+  console.log("BUNDLECART ROUTE CHOSEN billing_redirect_triggered", {
+    shop,
+    path: req.path
+  });
   console.log("BUNDLECART REDIRECTING TO BILLING", shop, billingRedirectUrl);
   res.redirect(billingRedirectUrl);
   return { allowed: false, shop };
@@ -3894,6 +3994,21 @@ export function createApp() {
   });
 
   app.get("/dashboard", async (req, res) => {
+    const shop = normalizeShopDomain(req.query.shop);
+    const embedded = String(req.query.embedded || "").trim() === "1";
+    const host = String(req.query.host || "").trim();
+    const isEmbeddedMerchantLaunch = Boolean(shop && (embedded || host));
+
+    if (isEmbeddedMerchantLaunch) {
+      await resolveMerchantAppRoute({
+        shopDomain: shop,
+        createIfMissing: true,
+        requestPath: req.path
+      });
+      res.sendFile(path.join(DIST_PATH, "index.html"));
+      return;
+    }
+
     const accessCheck = await enforceBundlecartBillingAccess(req, res);
     if (!accessCheck.allowed) {
       return;
@@ -4048,6 +4163,81 @@ export function createApp() {
     } catch (error) {
       console.error("MERCHANT DASHBOARD FETCH ERROR", shop, error);
       res.status(500).json({ ok: false, message: "Dashboard fetch failed" });
+    }
+  });
+
+  app.get("/api/merchant/app-access", async (req, res) => {
+    const shop = normalizeShopDomain(req.query.shop);
+    if (!shop) {
+      res.status(400).json({ ok: false, message: "Missing shop" });
+      return;
+    }
+
+    try {
+      const routeState = await resolveMerchantAppRoute({
+        shopDomain: shop,
+        createIfMissing: true,
+        requestPath: req.path
+      });
+      res.json({
+        shop,
+        merchant_found: Boolean(routeState.merchantFound),
+        token_present: Boolean(routeState.tokenPresent),
+        billing_active: Boolean(routeState.billingActive),
+        route: String(routeState.route || "billing_required"),
+        approval_url: routeState.approvalUrl || null,
+        auth_url: routeState.authUrl || null
+      });
+    } catch (error) {
+      console.error("MERCHANT APP ACCESS CHECK ERROR", shop, error);
+      res.status(500).json({ ok: false, message: "Access check failed" });
+    }
+  });
+
+  app.get("/api/merchant/billing/activate-url", async (req, res) => {
+    const shop = normalizeShopDomain(req.query.shop);
+    if (!shop) {
+      res.status(400).json({ ok: false, message: "Missing shop" });
+      return;
+    }
+
+    try {
+      const routeState = await resolveMerchantAppRoute({
+        shopDomain: shop,
+        createIfMissing: true,
+        requestPath: req.path
+      });
+      if (routeState.route === "auth_required") {
+        res.status(401).json({
+          ok: false,
+          message: "Merchant auth required",
+          auth_url: routeState.authUrl || `/auth?shop=${encodeURIComponent(shop)}`
+        });
+        return;
+      }
+      if (routeState.route === "dashboard") {
+        res.status(200).json({
+          ok: true,
+          billing_active: true,
+          approval_url: null
+        });
+        return;
+      }
+
+      const approvalUrl =
+        routeState.approvalUrl || `/billing/subscribe?shop=${encodeURIComponent(shop)}`;
+      console.log("BUNDLECART ROUTE CHOSEN billing_redirect_triggered", {
+        shop,
+        path: req.path
+      });
+      res.status(200).json({
+        ok: true,
+        billing_active: false,
+        approval_url: approvalUrl
+      });
+    } catch (error) {
+      console.error("MERCHANT BILLING ACTIVATE URL ERROR", shop, error);
+      res.status(500).json({ ok: false, message: "Unable to create activation URL" });
     }
   });
 
@@ -4363,10 +4553,11 @@ export function createApp() {
         embedded,
         hasHost: Boolean(host)
       });
-      const accessCheck = await enforceBundlecartBillingAccess(req, res, { allowMissingShop: false });
-      if (!accessCheck.allowed) {
-        return;
-      }
+      await resolveMerchantAppRoute({
+        shopDomain: shop,
+        createIfMissing: true,
+        requestPath: req.path
+      });
     }
 
     res.sendFile(path.join(DIST_PATH, "index.html"));

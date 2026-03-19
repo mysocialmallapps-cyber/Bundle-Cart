@@ -13,7 +13,15 @@ export default function App() {
     .toLowerCase();
   const embedded = String(searchParams.get("embedded") || "").trim() === "1";
   const host = String(searchParams.get("host") || "").trim();
-  const isEmbeddedMerchantContext = Boolean(shop && (embedded || host));
+  let isIframe = false;
+  if (typeof window !== "undefined") {
+    try {
+      isIframe = window.top !== window.self;
+    } catch {
+      isIframe = true;
+    }
+  }
+  const isEmbeddedMerchantContext = Boolean(shop && (embedded || host || isIframe));
   const isEmbeddedRootDashboard = location.pathname === "/" && isEmbeddedMerchantContext;
   const isMerchantDashboard = location.pathname === "/dashboard" || isEmbeddedRootDashboard;
   const isPublicBundlePage =

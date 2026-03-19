@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api";
+import BillingRequiredPage from "./BillingRequiredPage";
 
 function formatMetricValue(key, value) {
   const numeric = Number(value || 0);
@@ -18,43 +19,37 @@ const KPI_DEFINITIONS = [
     key: "bundles_created",
     title: "Bundles Created",
     tooltip: "Bundles where the first BundleCart order was placed at this store.",
-    definition:
-      "Number of first qualifying BundleCart orders started by this store."
+    definition: "Number of first qualifying BundleCart orders started by this store."
   },
   {
     key: "orders_bundled",
     title: "Orders Bundled",
     tooltip: "All this store's orders that are part of any BundleCart bundle.",
-    definition:
-      "Total orders from this store that were part of a BundleCart window."
+    definition: "Total orders from this store that were part of a BundleCart window."
   },
   {
     key: "extra_orders_generated",
     title: "Extra Orders Generated",
     tooltip: "Incremental orders beyond the first order in bundles for this store.",
-    definition:
-      "Bundled orders beyond the first order in each bundle started by this store."
+    definition: "Bundled orders beyond the first order in each bundle started by this store."
   },
   {
     key: "network_orders",
     title: "Network Orders",
     tooltip: "Orders at this store that joined bundles started by other stores.",
-    definition:
-      "Orders this store received from active BundleCart traffic started elsewhere."
+    definition: "Orders this store received from active BundleCart traffic started elsewhere."
   },
   {
     key: "avg_orders_per_bundle",
     title: "Average Orders Per Bundle",
     tooltip: "Average order count across bundles created by this store.",
-    definition:
-      "Total orders in bundles started by this store divided by bundles created."
+    definition: "Total orders in bundles started by this store divided by bundles created."
   },
   {
     key: "bundlecart_fees_collected",
     title: "BundleCart Fees Collected",
     tooltip: "Total customer-paid BundleCart first-order fees for bundles created here.",
-    definition:
-      "Total qualifying BundleCart first-order fees linked to bundles started by this store."
+    definition: "Total qualifying BundleCart first-order fees linked to bundles started by this store."
   }
 ];
 
@@ -81,9 +76,15 @@ export default function MerchantDashboardPage() {
     .toLowerCase();
   const isEmbedded = String(searchParams.get("embedded") || "").trim() === "1";
   const hasHostParam = Boolean(String(searchParams.get("host") || "").trim());
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [accessLoading, setAccessLoading] = useState(true);
   const [error, setError] = useState("");
   const [activityError, setActivityError] = useState("");
+  const [accessState, setAccessState] = useState({
+    route: "",
+    approval_url: "",
+    auth_url: ""
+  });
   const [metrics, setMetrics] = useState({
     bundles_created: 0,
     orders_bundled: 0,
@@ -96,16 +97,73 @@ export default function MerchantDashboardPage() {
 
   useEffect(() => {
     let mounted = true;
-    setLoading(true);
+    setAccessLoading(true);
+    setLoading(false);
     setError("");
     setActivityError("");
+    setAccessState({
+      route: "",
+      approval_url: "",
+      auth_url: ""
+    });
+    setRecentActivity([]);
+    setMetrics({
+      bundles_created: 0,
+      orders_bundled: 0,
+      extra_orders_generated: 0,
+      network_orders: 0,
+      avg_orders_per_bundle: 0,
+      bundlecart_fees_collected: 0
+    });
+
     if (!shop) {
-      setLoading(false);
+      setAccessLoading(false);
       setError("Missing shop query parameter.");
       return () => {
         mounted = false;
       };
     }
+
+    api
+      .getMerchantAppAccess(shop)
+      .then((payload) => {
+        if (!mounted) {
+          return;
+        }
+        setAccessState({
+          route: String(payload?.route || ""),
+          approval_url: String(payload?.approval_url || ""),
+          auth_url: String(payload?.auth_url || "")
+        });
+      })
+      .catch((requestError) => {
+        if (!mounted) {
+          return;
+        }
+        setError(requestError.message || "Failed to load dashboard access.");
+      })
+      .finally(() => {
+        if (!mounted) {
+          return;
+        }
+        setAccessLoading(false);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [shop]);
+
+  useEffect(() => {
+    if (accessState.route !== "dashboard" || !shop) {
+      setLoading(false);
+      return undefined;
+    }
+
+    let mounted = true;
+    setLoading(true);
+    setError("");
+    setActivityError("");
 
     Promise.allSettled([api.getMerchantDashboard(shop), api.getMerchantDashboardActivity(shop)])
       .then((results) => {
@@ -145,7 +203,7 @@ export default function MerchantDashboardPage() {
     return () => {
       mounted = false;
     };
-  }, [shop]);
+  }, [accessState.route, shop]);
 
   const cards = useMemo(
     () =>
@@ -198,6 +256,45 @@ export default function MerchantDashboardPage() {
 
     return computedInsights;
   }, [metrics]);
+
+  if (accessLoading) {
+    return (
+      <div className="page merchant-dashboard-page">
+        <p>Loading dashboard access...</p>
+      </div>
+    );
+  }
+
+  if (accessState.route === "billing_required") {
+    return <BillingRequiredPage shop={shop} approvalUrl={accessState.approval_url} />;
+  }
+
+  if (accessState.route === "auth_required") {
+    return (
+      <div className="page merchant-dashboard-page">
+        <section className="card merchant-billing-required-card">
+          <div className="merchant-dashboard-brand">
+            <img src="/logo.png" alt="BundleCart" />
+            <div>
+              <h3>Reconnect BundleCart</h3>
+              <p className="subtle">Store: {shop || "Unknown store"}</p>
+            </div>
+          </div>
+          <p className="merchant-billing-required-message">
+            BundleCart is not fully connected for this store yet. Reconnect to continue.
+          </p>
+          <a
+            className="marketing-btn marketing-btn-primary merchant-billing-required-button"
+            href={accessState.auth_url || `/auth?shop=${encodeURIComponent(shop)}`}
+            target="_top"
+            rel="noreferrer"
+          >
+            Reconnect BundleCart
+          </a>
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div className="page merchant-dashboard-page">

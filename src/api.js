@@ -62,8 +62,12 @@ export const api = {
   getCustomerInsights: (signal) => request("/customers/insights", { signal }),
   getMerchantDashboard: (shop) =>
     request(`/merchant/dashboard?shop=${encodeURIComponent(String(shop || "").trim())}`),
+  getMerchantAppAccess: (shop) =>
+    request(`/merchant/app-access?shop=${encodeURIComponent(String(shop || "").trim())}`),
   getMerchantDashboardActivity: (shop) =>
     request(`/merchant/dashboard/activity?shop=${encodeURIComponent(String(shop || "").trim())}`),
+  getMerchantBillingActivateUrl: (shop) =>
+    request(`/merchant/billing/activate-url?shop=${encodeURIComponent(String(shop || "").trim())}`),
   getPublicBundle: (input) => {
     const token =
       typeof input === "string" ? String(input || "").trim() : String(input?.token || "").trim();
