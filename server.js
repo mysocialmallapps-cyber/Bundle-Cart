@@ -1478,13 +1478,31 @@ async function getBundleNotificationSummary(bundleId) {
 }
 
 async function sendBundleStartedEmailNotification(bundleId, fallbackEmail) {
+  console.log("BUNDLECART EMAIL TRIGGER FIRST ORDER START", {
+    bundleId: Number(bundleId || 0),
+    fallbackEmail: String(fallbackEmail || "").trim().toLowerCase()
+  });
   try {
     const summary = await getBundleNotificationSummary(bundleId);
     const recipient = String(summary?.customer_email || fallbackEmail || "").trim().toLowerCase();
+    if (!recipient) {
+      console.log("BUNDLECART EMAIL SKIPPED", {
+        reason: "missing_recipient",
+        type: "first_order",
+        bundleId: Number(bundleId || 0)
+      });
+      return;
+    }
     const orderCount = Number(summary?.order_count || 0);
     const bundleUrl = buildPublicBundleUrl({
       bundleId: summary?.bundle_id || bundleId,
       customerEmail: recipient
+    });
+    console.log("BUNDLECART EMAIL TRIGGER FIRST ORDER", {
+      bundleId: Number(summary?.bundle_id || bundleId || 0),
+      recipient,
+      bundleToken: String(summary?.bundle_public_token || "").trim(),
+      orderCount
     });
     const template = buildBundleStartedEmailTemplate({
       activeUntil: summary?.active_until,
@@ -1499,13 +1517,31 @@ async function sendBundleStartedEmailNotification(bundleId, fallbackEmail) {
 }
 
 async function sendBundleOrderAddedEmailNotification(bundleId, fallbackEmail) {
+  console.log("BUNDLECART EMAIL TRIGGER LINKED ORDER START", {
+    bundleId: Number(bundleId || 0),
+    fallbackEmail: String(fallbackEmail || "").trim().toLowerCase()
+  });
   try {
     const summary = await getBundleNotificationSummary(bundleId);
     const recipient = String(summary?.customer_email || fallbackEmail || "").trim().toLowerCase();
+    if (!recipient) {
+      console.log("BUNDLECART EMAIL SKIPPED", {
+        reason: "missing_recipient",
+        type: "linked_order",
+        bundleId: Number(bundleId || 0)
+      });
+      return;
+    }
     const orderCount = Number(summary?.order_count || 0);
     const bundleUrl = buildPublicBundleUrl({
       bundleId: summary?.bundle_id || bundleId,
       customerEmail: recipient
+    });
+    console.log("BUNDLECART EMAIL TRIGGER LINKED ORDER", {
+      bundleId: Number(summary?.bundle_id || bundleId || 0),
+      recipient,
+      bundleToken: String(summary?.bundle_public_token || "").trim(),
+      orderCount
     });
     const template = buildBundleOrderAddedEmailTemplate({
       activeUntil: summary?.active_until,
@@ -2521,6 +2557,105 @@ async function registerCarrierServiceForShop(shopDomain, accessToken) {
   });
 }
 
+function getBundlecartOrdersCreateWebhookAddress() {
+  const baseUrl = String(process.env.APP_URL || "https://bundle-cart.replit.app").replace(/\/+$/, "");
+  return `${baseUrl}/api/webhooks/orders-create`;
+}
+
+async function registerOrdersCreateWebhookForShop(shopDomain, accessToken) {
+  const normalizedShop = normalizeShopDomain(shopDomain);
+  const token = String(accessToken || "").trim();
+  if (!normalizedShop || !token) {
+    return false;
+  }
+
+  const webhookAddress = getBundlecartOrdersCreateWebhookAddress();
+  const webhooksEndpoint = `https://${normalizedShop}/admin/api/${SHOPIFY_ADMIN_API_VERSION}/webhooks.json`;
+  console.log("SHOPIFY WEBHOOK REGISTER START", normalizedShop, "orders/create", webhookAddress);
+
+  try {
+    const listResponse = await fetch(`${webhooksEndpoint}?topic=orders/create&limit=250`, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        "X-Shopify-Access-Token": token
+      }
+    });
+    if (!listResponse.ok) {
+      throw new Error(`webhook_list_failed_${listResponse.status}`);
+    }
+
+    let listPayload = {};
+    try {
+      listPayload = await listResponse.json();
+    } catch {
+      listPayload = {};
+    }
+
+    const existingWebhooks = Array.isArray(listPayload?.webhooks) ? listPayload.webhooks : [];
+    const normalizedTargetAddress = webhookAddress.replace(/\/+$/, "");
+    const existing = existingWebhooks.find(
+      (webhook) =>
+        String(webhook?.topic || "").trim() === "orders/create" &&
+        String(webhook?.address || "")
+          .trim()
+          .replace(/\/+$/, "") === normalizedTargetAddress
+    );
+    if (existing) {
+      console.log("SHOPIFY WEBHOOK EXISTS orders/create", normalizedShop, existing.id || "");
+      return true;
+    }
+
+    const createResponse = await fetch(webhooksEndpoint, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-Shopify-Access-Token": token
+      },
+      body: JSON.stringify({
+        webhook: {
+          topic: "orders/create",
+          address: webhookAddress,
+          format: "json"
+        }
+      })
+    });
+
+    if (createResponse.ok) {
+      let createPayload = {};
+      try {
+        createPayload = await createResponse.json();
+      } catch {
+        createPayload = {};
+      }
+      console.log(
+        "SHOPIFY WEBHOOK CREATED orders/create",
+        normalizedShop,
+        createPayload?.webhook?.id || ""
+      );
+      return true;
+    }
+
+    let createErrorPayload = "";
+    try {
+      createErrorPayload = await createResponse.text();
+    } catch {
+      createErrorPayload = "";
+    }
+    console.error(
+      "SHOPIFY WEBHOOK CREATE ERROR orders/create",
+      normalizedShop,
+      createResponse.status,
+      createErrorPayload
+    );
+    return false;
+  } catch (error) {
+    console.error("SHOPIFY WEBHOOK REGISTER ERROR orders/create", normalizedShop, error);
+    return false;
+  }
+}
+
 async function checkShopifyWriteOrdersScope(shopDomain, accessToken) {
   const normalizedShop = normalizeShopDomain(shopDomain);
   const token = String(accessToken || "").trim();
@@ -2653,6 +2788,12 @@ async function resolveMerchantAppRoute({
       route: "auth_required",
       authUrl: `/auth?shop=${encodeURIComponent(shop)}`
     };
+  }
+
+  try {
+    await registerOrdersCreateWebhookForShop(shop, accessToken);
+  } catch (error) {
+    console.error("SHOPIFY WEBHOOK REGISTER ERROR orders/create", shop, error);
   }
 
   const subscriptionMode = detectBundlecartSubscriptionMode();
@@ -3062,6 +3203,7 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
   const normalizedShopDomain =
     typeof shopDomain === "string" ? shopDomain.trim() : "";
   const orderId = String(order.id);
+  const orderName = String(order.name || "").trim();
   const email =
     typeof order.email === "string" && order.email.trim()
       ? order.email.trim().toLowerCase()
@@ -3124,9 +3266,17 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
 
   if (bundlecartSelected) {
     if (!addressHash) {
-      console.log("BUNDLECART ADDRESS MISMATCH", buildBundlecartLogContext({ orderId }));
+      console.log(
+        "BUNDLECART LINKED ORDER SKIPPED",
+        buildBundlecartLogContext({
+          reason: "missing_or_invalid_address_hash",
+          orderId,
+          orderName
+        })
+      );
     } else {
       let groupId = null;
+      let groupBundleToken = "";
       let existingWindowFound = false;
       let newBundleReason = "no_active_bundle_found";
 
@@ -3145,8 +3295,9 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
         );
         console.log(
           "BUNDLECART EXISTING BUNDLE WINDOW FOUND",
-          buildBundlecartLogContext({ bundleId: groupId, orderId })
+          buildBundlecartLogContext({ bundleId: groupId, orderId, orderName })
         );
+        groupBundleToken = await ensureBundlePublicTokenForGroup(groupId);
         if (
           existingFirstShopDomain &&
           normalizedShopDomain &&
@@ -3158,17 +3309,18 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
               bundleId: groupId,
               firstShopDomain: existingFirstShopDomain,
               currentShopDomain: normalizedShopDomain,
-              orderId
+              orderId,
+              orderName
             })
           );
         }
         console.log(
           "BUNDLECART ORDER LINKED TO EXISTING GROUP",
-          buildBundlecartLogContext({ bundleId: groupId, orderId })
+          buildBundlecartLogContext({ bundleId: groupId, orderId, orderName, bundleToken: groupBundleToken })
         );
         console.log(
           "BUNDLECART NETWORK LINKED ORDER FREE",
-          buildBundlecartLogContext({ bundleId: groupId, orderId })
+          buildBundlecartLogContext({ bundleId: groupId, orderId, orderName, bundleToken: groupBundleToken })
         );
         await dbPool.query(UPDATE_LINK_GROUP_LAST_SEEN_SQL, [groupId]);
         await dbPool.query(UPDATE_LINK_GROUP_METADATA_SQL, [
@@ -3192,16 +3344,17 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
         if (activeGroupRecheckResult.rowCount > 0) {
           existingWindowFound = true;
           groupId = activeGroupRecheckResult.rows[0].id;
+          groupBundleToken = await ensureBundlePublicTokenForGroup(groupId);
           const existingFirstShopDomain = normalizeShopDomain(
             activeGroupRecheckResult.rows[0].first_shop_domain
           );
           console.log(
             "BUNDLECART DUPLICATE BUNDLE PREVENTED REUSED ACTIVE GROUP",
-            buildBundlecartLogContext({ bundleId: groupId, orderId })
+            buildBundlecartLogContext({ bundleId: groupId, orderId, orderName, bundleToken: groupBundleToken })
           );
           console.log(
             "BUNDLECART EXISTING BUNDLE WINDOW FOUND",
-            buildBundlecartLogContext({ bundleId: groupId, orderId })
+            buildBundlecartLogContext({ bundleId: groupId, orderId, orderName, bundleToken: groupBundleToken })
           );
           if (
             existingFirstShopDomain &&
@@ -3214,17 +3367,18 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
                 bundleId: groupId,
                 firstShopDomain: existingFirstShopDomain,
                 currentShopDomain: normalizedShopDomain,
-                orderId
+                orderId,
+                orderName
               })
             );
           }
           console.log(
             "BUNDLECART ORDER LINKED TO EXISTING GROUP",
-            buildBundlecartLogContext({ bundleId: groupId, orderId })
+            buildBundlecartLogContext({ bundleId: groupId, orderId, orderName, bundleToken: groupBundleToken })
           );
           console.log(
             "BUNDLECART NETWORK LINKED ORDER FREE",
-            buildBundlecartLogContext({ bundleId: groupId, orderId })
+            buildBundlecartLogContext({ bundleId: groupId, orderId, orderName, bundleToken: groupBundleToken })
           );
           await dbPool.query(UPDATE_LINK_GROUP_LAST_SEEN_SQL, [groupId]);
           await dbPool.query(UPDATE_LINK_GROUP_METADATA_SQL, [
@@ -3255,25 +3409,25 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
           console.log("DB STEP link_groups insert");
           const createGroupResult = await dbPool.query(INSERT_LINK_GROUP_SQL, [email || ""]);
           groupId = createGroupResult.rows[0].id;
-          await ensureBundlePublicTokenForGroup(groupId);
+          groupBundleToken = await ensureBundlePublicTokenForGroup(groupId);
           console.log(
             "BUNDLECART FIRST BUNDLE CREATED",
-            buildBundlecartLogContext({ bundleId: groupId, orderId })
+            buildBundlecartLogContext({ bundleId: groupId, orderId, orderName, bundleToken: groupBundleToken })
           );
           if (newBundleReason === "previous_bundle_expired") {
             console.log(
               "BUNDLECART NEW BUNDLE CREATED BECAUSE PREVIOUS BUNDLE EXPIRED",
-              buildBundlecartLogContext({ bundleId: groupId, orderId })
+              buildBundlecartLogContext({ bundleId: groupId, orderId, orderName, bundleToken: groupBundleToken })
             );
           } else {
             console.log(
               "BUNDLECART NEW BUNDLE CREATED BECAUSE NO ACTIVE BUNDLE FOUND",
-              buildBundlecartLogContext({ bundleId: groupId, orderId })
+              buildBundlecartLogContext({ bundleId: groupId, orderId, orderName, bundleToken: groupBundleToken })
             );
           }
           console.log(
             "BUNDLECART NEW BUNDLE WINDOW CREATED",
-            buildBundlecartLogContext({ bundleId: groupId, orderId })
+            buildBundlecartLogContext({ bundleId: groupId, orderId, orderName, bundleToken: groupBundleToken })
           );
           console.log("BUNDLECART NETWORK FIRST ORDER FEE 5");
           await dbPool.query(START_BUNDLECART_WINDOW_SQL, [
@@ -3308,12 +3462,25 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
           console.log("LINKED_ORDER INSERTED", orderId, groupId);
           console.log(
             "BUNDLECART BUNDLE LINKED",
-            buildBundlecartLogContext({ bundleId: groupId, orderId })
+            buildBundlecartLogContext({
+              bundleId: groupId,
+              orderId,
+              orderName,
+              bundleToken: groupBundleToken || ""
+            })
           );
           if (existingWindowFound) {
             bundleOrderAddedEmailGroupId = groupId;
+            console.log(
+              "BUNDLECART EMAIL TRIGGER LINKED ORDER QUEUED",
+              buildBundlecartLogContext({ bundleId: groupId, orderId, orderName, recipient: email || "" })
+            );
           } else {
             bundleStartedEmailGroupId = groupId;
+            console.log(
+              "BUNDLECART EMAIL TRIGGER FIRST ORDER QUEUED",
+              buildBundlecartLogContext({ bundleId: groupId, orderId, orderName, recipient: email || "" })
+            );
             if (customerFeeConfirmed) {
               try {
                 await processBundlecartMerchantBilling({
@@ -3328,11 +3495,37 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
             }
           }
         } else {
-          console.log("LINKED_ORDER DUPLICATE", orderId);
+          console.log(
+            "BUNDLECART LINKED ORDER SKIPPED",
+            buildBundlecartLogContext({
+              reason: "duplicate_order",
+              bundleId: groupId,
+              orderId,
+              orderName,
+              bundleToken: groupBundleToken || ""
+            })
+          );
         }
+      } else {
+        console.log(
+          "BUNDLECART LINKED ORDER SKIPPED",
+          buildBundlecartLogContext({
+            reason: "missing_group_id_after_matching",
+            orderId,
+            orderName
+          })
+        );
       }
     }
   } else {
+    console.log(
+      "BUNDLECART LINKED ORDER SKIPPED",
+      buildBundlecartLogContext({
+        reason: "bundlecart_not_selected",
+        orderId,
+        orderName
+      })
+    );
     let groupId = null;
     if (!email) {
       console.log("LINK SKIPPED no email", orderId);
@@ -3377,6 +3570,17 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
   }
   if (bundleOrderAddedEmailGroupId != null) {
     await sendBundleOrderAddedEmailNotification(bundleOrderAddedEmailGroupId, email);
+  }
+  if (bundlecartSelected && bundleStartedEmailGroupId == null && bundleOrderAddedEmailGroupId == null) {
+    console.log(
+      "BUNDLECART EMAIL SKIPPED",
+      buildBundlecartLogContext({
+        reason: "no_email_trigger_group_available",
+        orderId,
+        orderName,
+        recipient: email || ""
+      })
+    );
   }
   console.log("DB STEP shopify_orders insert");
   const result = await dbPool.query(INSERT_SHOPIFY_ORDER_SQL, [
@@ -3476,7 +3680,8 @@ export function createApp() {
         matchedBundleId: emptyPayload.bundle_id,
         activeUntil: emptyPayload.active_until,
         currentServerTime: emptyPayload.current_server_time,
-        finalState: emptyPayload.bundle_state
+        finalState: emptyPayload.bundle_state,
+        orderCount: 0
       });
       return emptyPayload;
     }
@@ -3512,7 +3717,8 @@ export function createApp() {
       matchedBundleId: payload.bundle_id,
       activeUntil: payload.active_until,
       currentServerTime: payload.current_server_time,
-      finalState: payload.bundle_state
+      finalState: payload.bundle_state,
+      orderCount: Array.isArray(payload.orders) ? payload.orders.length : 0
     });
     return payload;
   }
@@ -3865,6 +4071,11 @@ export function createApp() {
       } catch (error) {
         console.error("CARRIER SERVICE CREATE ERROR", shop, error);
       }
+      try {
+        await registerOrdersCreateWebhookForShop(shop, accessToken);
+      } catch (error) {
+        console.error("SHOPIFY WEBHOOK REGISTER ERROR orders/create", shop, error);
+      }
 
       subscriptionCheckResult = await ensureMerchantBillingSubscription({
         shopDomain: shop,
@@ -4063,7 +4274,8 @@ export function createApp() {
         matchedBundleId: emptyPayload.bundle_id,
         activeUntil: emptyPayload.active_until,
         currentServerTime: emptyPayload.current_server_time,
-        finalState: emptyPayload.bundle_state
+        finalState: emptyPayload.bundle_state,
+        orderCount: 0
       });
       res.status(200).json(emptyPayload);
       return;
@@ -4099,7 +4311,8 @@ export function createApp() {
         matchedBundleId: payload.bundle_id,
         activeUntil: payload.active_until,
         currentServerTime: payload.current_server_time,
-        finalState: payload.bundle_state
+        finalState: payload.bundle_state,
+        orderCount: Array.isArray(payload.orders) ? payload.orders.length : 0
       });
       res.status(200).json(payload);
     } catch (error) {
