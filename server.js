@@ -565,43 +565,51 @@ LIMIT 1;
 `;
 
 const SELECT_MERCHANT_DASHBOARD_METRICS_SQL = `
-WITH bundles_created AS (
+WITH normalized_shop AS (
+  SELECT LOWER(TRIM($1::text)) AS shop_domain
+),
+bundles_created AS (
   SELECT COUNT(*)::integer AS value
   FROM link_groups lg
-  WHERE lg.first_shop_domain = $1::text
+  CROSS JOIN normalized_shop ns
+  WHERE LOWER(TRIM(COALESCE(lg.first_shop_domain, ''))) = ns.shop_domain
 ),
 orders_bundled AS (
   SELECT COUNT(*)::integer AS value
   FROM linked_orders lo
-  WHERE lo.shop_domain = $1::text
+  CROSS JOIN normalized_shop ns
+  WHERE LOWER(TRIM(COALESCE(lo.shop_domain, ''))) = ns.shop_domain
 ),
 network_orders AS (
   SELECT COUNT(*)::integer AS value
   FROM linked_orders lo
   JOIN link_groups lg ON lg.id = lo.group_id
-  WHERE lo.shop_domain = $1::text
-    AND lg.first_shop_domain IS NOT NULL
-    AND lg.first_shop_domain <> $1::text
+  CROSS JOIN normalized_shop ns
+  WHERE LOWER(TRIM(COALESCE(lo.shop_domain, ''))) = ns.shop_domain
+    AND NULLIF(TRIM(COALESCE(lg.first_shop_domain, '')), '') IS NOT NULL
+    AND LOWER(TRIM(COALESCE(lg.first_shop_domain, ''))) <> ns.shop_domain
 ),
 orders_in_bundles_created AS (
   SELECT COUNT(lo.id)::integer AS value
   FROM link_groups lg
   LEFT JOIN linked_orders lo ON lo.group_id = lg.id
-  WHERE lg.first_shop_domain = $1::text
+  CROSS JOIN normalized_shop ns
+  WHERE LOWER(TRIM(COALESCE(lg.first_shop_domain, ''))) = ns.shop_domain
 ),
 fees_collected AS (
   SELECT COALESCE(SUM(lo.bundlecart_fee_amount), 0)::numeric AS value
   FROM link_groups lg
   JOIN linked_orders lo ON lo.group_id = lg.id
-  WHERE lg.first_shop_domain = $1::text
-    AND lo.shop_domain = $1::text
+  CROSS JOIN normalized_shop ns
+  WHERE LOWER(TRIM(COALESCE(lg.first_shop_domain, ''))) = ns.shop_domain
+    AND LOWER(TRIM(COALESCE(lo.shop_domain, ''))) = ns.shop_domain
     AND lo.bundlecart_paid = TRUE
     AND lo.shopify_order_id = lg.first_paid_order_id
 )
 SELECT
   bc.value AS bundles_created,
   ob.value AS orders_bundled,
-  GREATEST(ob.value - bc.value, 0) AS extra_orders_generated,
+  GREATEST(oic.value - bc.value, 0) AS extra_orders_generated,
   no.value AS network_orders,
   CASE
     WHEN bc.value = 0 THEN 0::numeric
@@ -4696,14 +4704,22 @@ export function createApp() {
 
       const result = await dbPool.query(SELECT_MERCHANT_DASHBOARD_METRICS_SQL, [shop]);
       const row = result.rows[0] || {};
-      res.json({
+      const payload = {
         bundles_created: Number(row.bundles_created || 0),
         orders_bundled: Number(row.orders_bundled || 0),
         extra_orders_generated: Number(row.extra_orders_generated || 0),
         network_orders: Number(row.network_orders || 0),
         avg_orders_per_bundle: Number(row.avg_orders_per_bundle || 0),
         bundlecart_fees_collected: Number(row.bundlecart_fees_collected || 0)
+      };
+      console.log("MERCHANT DASHBOARD KPI ATTRIBUTION", {
+        shop,
+        creatorBundlesFound: payload.bundles_created,
+        bundledOrdersFound: payload.orders_bundled,
+        networkOrdersFound: payload.network_orders,
+        metricPayload: payload
       });
+      res.json(payload);
     } catch (error) {
       console.error("MERCHANT DASHBOARD FETCH ERROR", shop, error);
       res.status(500).json({ ok: false, message: "Dashboard fetch failed" });
