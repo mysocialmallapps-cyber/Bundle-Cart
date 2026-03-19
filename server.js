@@ -15,7 +15,27 @@ const DIST_PATH = path.resolve("dist");
 const { Pool } = pg;
 
 const DATABASE_URL = process.env.DATABASE_URL || "";
-const dbPool = DATABASE_URL ? new Pool({ connectionString: DATABASE_URL }) : null;
+const dbPool = DATABASE_URL
+  ? new Pool({
+      connectionString: DATABASE_URL,
+      max: Number.parseInt(String(process.env.PG_POOL_MAX || "20"), 10) || 20,
+      idleTimeoutMillis: Number.parseInt(String(process.env.PG_IDLE_TIMEOUT_MS || "30000"), 10) || 30000,
+      connectionTimeoutMillis:
+        Number.parseInt(String(process.env.PG_CONNECT_TIMEOUT_MS || "10000"), 10) || 10000,
+      keepAlive: true,
+      keepAliveInitialDelayMillis:
+        Number.parseInt(String(process.env.PG_KEEPALIVE_INITIAL_DELAY_MS || "10000"), 10) || 10000
+    })
+  : null;
+
+if (dbPool) {
+  dbPool.on("error", (error) => {
+    console.error("DB POOL CLIENT ERROR", {
+      code: String(error?.code || ""),
+      message: String(error?.message || "unknown_db_pool_error")
+    });
+  });
+}
 const SHOPIFY_ADMIN_API_VERSION = "2026-01";
 const BUNDLECART_CARRIER_NAME = "BundleCart";
 const BUNDLECART_CALLBACK_URL = "https://bundle-cart.replit.app/api/shipping/rates";
@@ -1425,7 +1445,18 @@ async function ensureBundlePublicTokenForGroup(bundleId) {
     return "";
   }
 
-  const existingResult = await dbPool.query(SELECT_LINK_GROUP_PUBLIC_TOKEN_SQL, [bundleId]);
+  const tokenQueryContext = {
+    path: "ensureBundlePublicTokenForGroup",
+    orderId: "",
+    shopDomain: ""
+  };
+  const existingResult = await dbQueryWithRetry({
+    queryName: "bundle_token:select_existing",
+    text: SELECT_LINK_GROUP_PUBLIC_TOKEN_SQL,
+    values: [bundleId],
+    context: tokenQueryContext,
+    maxRetries: 1
+  });
   const existingToken = String(existingResult.rows[0]?.bundle_public_token || "").trim();
   if (existingToken) {
     return existingToken;
@@ -1434,10 +1465,13 @@ async function ensureBundlePublicTokenForGroup(bundleId) {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const candidateToken = generateBundlePublicToken();
     try {
-      const updateResult = await dbPool.query(UPSERT_LINK_GROUP_PUBLIC_TOKEN_SQL, [
-        bundleId,
-        candidateToken
-      ]);
+      const updateResult = await dbQueryWithRetry({
+        queryName: "bundle_token:upsert",
+        text: UPSERT_LINK_GROUP_PUBLIC_TOKEN_SQL,
+        values: [bundleId, candidateToken],
+        context: tokenQueryContext,
+        maxRetries: 1
+      });
       const token = String(updateResult.rows[0]?.bundle_public_token || "").trim();
       if (token) {
         return token;
@@ -1552,7 +1586,17 @@ async function getStoredMerchantBillingSubscription(shopDomain) {
   if (!normalizedShop) {
     return null;
   }
-  const result = await dbPool.query(SELECT_MERCHANT_BILLING_SUBSCRIPTION_SQL, [normalizedShop]);
+  const result = await dbQueryWithRetry({
+    queryName: "merchant_billing_subscription:select",
+    text: SELECT_MERCHANT_BILLING_SUBSCRIPTION_SQL,
+    values: [normalizedShop],
+    context: {
+      path: "ensureMerchantBillingSubscription",
+      shopDomain: normalizedShop,
+      orderId: ""
+    },
+    maxRetries: 1
+  });
   return result.rows[0] || null;
 }
 
@@ -1573,16 +1617,26 @@ async function upsertMerchantBillingSubscriptionState({
   if (!normalizedShop) {
     return;
   }
-  await dbPool.query(UPSERT_MERCHANT_BILLING_SUBSCRIPTION_SQL, [
-    normalizedShop,
-    appSubscriptionId || null,
-    lineItemId || null,
-    billingMode || null,
-    cappedAmount != null ? cappedAmount : null,
-    subscriptionStatus || null,
-    confirmationUrl || null,
-    lastError || null
-  ]);
+  await dbQueryWithRetry({
+    queryName: "merchant_billing_subscription:upsert",
+    text: UPSERT_MERCHANT_BILLING_SUBSCRIPTION_SQL,
+    values: [
+      normalizedShop,
+      appSubscriptionId || null,
+      lineItemId || null,
+      billingMode || null,
+      cappedAmount != null ? cappedAmount : null,
+      subscriptionStatus || null,
+      confirmationUrl || null,
+      lastError || null
+    ],
+    context: {
+      path: "ensureMerchantBillingSubscription",
+      shopDomain: normalizedShop,
+      orderId: ""
+    },
+    maxRetries: 1
+  });
 }
 
 function buildBundlecartSubscriptionReturnUrl(shopDomain, options = {}) {
@@ -3117,10 +3171,17 @@ async function findMerchantAuthByShop(shopDomain) {
   }
 
   try {
-    const result = await dbPool.query(
-      "SELECT domain, access_token FROM merchants WHERE domain = $1::text LIMIT 1",
-      [normalizedShop]
-    );
+    const result = await dbQueryWithRetry({
+      queryName: "merchant_route:find_auth_by_shop",
+      text: "SELECT domain, access_token FROM merchants WHERE domain = $1::text LIMIT 1",
+      values: [normalizedShop],
+      context: {
+        path: "resolveMerchantAppRoute",
+        shopDomain: normalizedShop,
+        orderId: ""
+      },
+      maxRetries: 1
+    });
     if (result.rowCount === 0) {
       return { exists: false, tokenPresent: false };
     }
@@ -3200,8 +3261,36 @@ async function resolveMerchantAppRoute({
     };
   }
 
-  const merchantResult = await dbPool.query(SELECT_MERCHANT_ACCESS_TOKEN_SQL, [shop]);
-  const accessToken = String(merchantResult.rows[0]?.access_token || "").trim();
+  let accessToken = "";
+  try {
+    const merchantResult = await dbQueryWithRetry({
+      queryName: "merchant_route:access_token_lookup",
+      text: SELECT_MERCHANT_ACCESS_TOKEN_SQL,
+      values: [shop],
+      context: {
+        path: "resolveMerchantAppRoute",
+        shopDomain: shop,
+        orderId: ""
+      },
+      maxRetries: 1
+    });
+    accessToken = String(merchantResult.rows[0]?.access_token || "").trim();
+  } catch (error) {
+    console.error("BUNDLECART MERCHANT TOKEN LOOKUP ERROR", {
+      shop,
+      path: requestPath,
+      error: String(error?.message || error)
+    });
+    return {
+      shop,
+      merchantFound: true,
+      tokenPresent: false,
+      billingActive: false,
+      route: "billing_required",
+      approvalUrl: "",
+      reason: "merchant_token_lookup_failed"
+    };
+  }
   if (!accessToken) {
     console.log("BUNDLECART BILLING STATUS", { shop, billing: "missing" });
     console.log("BUNDLECART ROUTE CHOSEN auth_required", { shop, path: requestPath });
@@ -3431,9 +3520,91 @@ function isFatalDbError(error) {
   );
 }
 
+function isRetryableDbError(error) {
+  if (isFatalDbError(error)) {
+    return true;
+  }
+  const code = String(error?.code || "");
+  const message = String(error?.message || "").toLowerCase();
+  return (
+    code === "40001" ||
+    code === "40P01" ||
+    code === "55P03" ||
+    message.includes("terminating connection") ||
+    message.includes("connection terminated unexpectedly") ||
+    message.includes("connection reset") ||
+    message.includes("the database system is starting up")
+  );
+}
+
+function waitForDbRetry(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function dbQueryWithRetry({
+  queryName,
+  text,
+  values = [],
+  context = {},
+  maxRetries = 1
+}) {
+  if (!dbPool) {
+    throw new Error("db_pool_unavailable");
+  }
+
+  const safeContext = {
+    shopDomain: String(context.shopDomain || ""),
+    orderId: String(context.orderId || ""),
+    path: String(context.path || ""),
+    queryName: String(queryName || "unnamed_query")
+  };
+
+  let attempt = 0;
+  while (attempt <= maxRetries) {
+    attempt += 1;
+    const startedAt = Date.now();
+    console.log("DB QUERY START", {
+      ...safeContext,
+      attempt
+    });
+    try {
+      const result = await dbPool.query(text, values);
+      console.log("DB QUERY END", {
+        ...safeContext,
+        attempt,
+        rowCount: Number(result?.rowCount || 0),
+        durationMs: Date.now() - startedAt
+      });
+      return result;
+    } catch (error) {
+      const retryable = isRetryableDbError(error);
+      console.error("DB QUERY ERROR", {
+        ...safeContext,
+        attempt,
+        code: String(error?.code || ""),
+        message: String(error?.message || "unknown_db_error"),
+        retryable
+      });
+      if (!retryable || attempt > maxRetries) {
+        throw error;
+      }
+      const backoffMs = Math.min(300 * attempt, 1000);
+      await waitForDbRetry(backoffMs);
+    }
+  }
+
+  throw new Error("db_query_retry_exhausted");
+}
+
 async function runNonCriticalSchemaQuery(sql, label) {
   try {
-    await dbPool.query(sql);
+    await dbQueryWithRetry({
+      queryName: `schema:${label}`,
+      text: sql,
+      values: [],
+      context: { path: "schema_migration" },
+      maxRetries: 1
+    });
   } catch (error) {
     console.error(`DB SCHEMA NON-CRITICAL ${label}`, error);
     if (isFatalDbError(error)) {
@@ -3682,6 +3853,19 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
     typeof shopDomain === "string" ? shopDomain.trim() : "";
   const orderId = String(order.id);
   const orderName = String(order.name || "").trim();
+  const webhookDbContext = {
+    shopDomain: normalizedShopDomain,
+    orderId,
+    path: "/api/webhooks/orders-create"
+  };
+  const runWebhookDbQuery = (queryName, text, values = [], maxRetries = 1) =>
+    dbQueryWithRetry({
+      queryName,
+      text,
+      values,
+      context: webhookDbContext,
+      maxRetries
+    });
   console.log("BUNDLECART WEBHOOK PERSIST START", {
     timestamp: new Date().toISOString(),
     shopDomain: normalizedShopDomain || "",
@@ -3745,7 +3929,7 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
     console.log("MERCHANT SKIPPED missing shop_domain");
   } else {
     console.log("DB STEP merchants upsert");
-    await dbPool.query(UPSERT_MERCHANT_SQL, [normalizedShopDomain]);
+    await runWebhookDbQuery("webhook:merchant_upsert", UPSERT_MERCHANT_SQL, [normalizedShopDomain]);
     console.log("MERCHANT UPSERTED", normalizedShopDomain);
   }
 
@@ -3766,9 +3950,11 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
       let newBundleReason = "no_active_bundle_found";
 
       console.log("DB STEP link_groups select active_by_address");
-      const activeGroupResult = await dbPool.query(SELECT_ACTIVE_BUNDLE_GROUP_BY_ADDRESS_SQL, [
-        addressHash
-      ]);
+      const activeGroupResult = await runWebhookDbQuery(
+        "webhook:bundle_lookup_active_by_address",
+        SELECT_ACTIVE_BUNDLE_GROUP_BY_ADDRESS_SQL,
+        [addressHash]
+      );
       console.log("BUNDLECART ACTIVE BUNDLE LOOKUP", buildBundlecartLogContext({
         activeBundleFound: activeGroupResult.rowCount > 0,
         orderId,
@@ -3812,25 +3998,31 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
           "BUNDLECART NETWORK LINKED ORDER FREE",
           buildBundlecartLogContext({ bundleId: groupId, orderId, orderName, bundleToken: groupBundleToken })
         );
-        await dbPool.query(UPDATE_LINK_GROUP_LAST_SEEN_SQL, [groupId]);
-        await dbPool.query(UPDATE_LINK_GROUP_METADATA_SQL, [
+        await runWebhookDbQuery("webhook:link_group_touch_last_seen", UPDATE_LINK_GROUP_LAST_SEEN_SQL, [
+          groupId
+        ]);
+        await runWebhookDbQuery("webhook:link_group_update_metadata", UPDATE_LINK_GROUP_METADATA_SQL, [
           groupId,
           JSON.stringify(shippingAddress || {})
         ]);
         console.log("BUNDLECART CUSTOMER ADDRESS STORED");
       } else {
         if (email) {
-          const activeHashesForEmailResult = await dbPool.query(SELECT_ACTIVE_GROUPS_FOR_EMAIL_DEBUG_SQL, [
-            email
-          ]);
+          const activeHashesForEmailResult = await runWebhookDbQuery(
+            "webhook:debug_active_groups_for_email",
+            SELECT_ACTIVE_GROUPS_FOR_EMAIL_DEBUG_SQL,
+            [email]
+          );
           for (const row of activeHashesForEmailResult.rows) {
             console.log("BUNDLECART EXISTING HASH", row.address_hash || "");
           }
         }
         console.log("BUNDLECART MATCH RESULT", false);
-        const activeGroupRecheckResult = await dbPool.query(SELECT_ACTIVE_BUNDLE_GROUP_BY_ADDRESS_SQL, [
-          addressHash
-        ]);
+        const activeGroupRecheckResult = await runWebhookDbQuery(
+          "webhook:bundle_lookup_active_by_address_recheck",
+          SELECT_ACTIVE_BUNDLE_GROUP_BY_ADDRESS_SQL,
+          [addressHash]
+        );
         if (activeGroupRecheckResult.rowCount > 0) {
           existingWindowFound = true;
           groupId = activeGroupRecheckResult.rows[0].id;
@@ -3880,11 +4072,14 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
             "BUNDLECART NETWORK LINKED ORDER FREE",
             buildBundlecartLogContext({ bundleId: groupId, orderId, orderName, bundleToken: groupBundleToken })
           );
-          await dbPool.query(UPDATE_LINK_GROUP_LAST_SEEN_SQL, [groupId]);
-          await dbPool.query(UPDATE_LINK_GROUP_METADATA_SQL, [
-            groupId,
-            JSON.stringify(shippingAddress || {})
+          await runWebhookDbQuery("webhook:link_group_touch_last_seen_recheck", UPDATE_LINK_GROUP_LAST_SEEN_SQL, [
+            groupId
           ]);
+          await runWebhookDbQuery(
+            "webhook:link_group_update_metadata_recheck",
+            UPDATE_LINK_GROUP_METADATA_SQL,
+            [groupId, JSON.stringify(shippingAddress || {})]
+          );
           console.log("BUNDLECART CUSTOMER ADDRESS STORED");
         } else {
           console.log(
@@ -3895,9 +4090,11 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
               orderName
             })
           );
-          const latestGroupResult = await dbPool.query(SELECT_LATEST_BUNDLE_GROUP_BY_ADDRESS_SQL, [
-            addressHash
-          ]);
+          const latestGroupResult = await runWebhookDbQuery(
+            "webhook:bundle_lookup_latest_by_address",
+            SELECT_LATEST_BUNDLE_GROUP_BY_ADDRESS_SQL,
+            [addressHash]
+          );
           if (latestGroupResult.rowCount > 0) {
             newBundleReason = "previous_bundle_expired";
             const latestBundleId = latestGroupResult.rows[0].id;
@@ -3915,7 +4112,11 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
           }
 
           console.log("DB STEP link_groups insert");
-          const createGroupResult = await dbPool.query(INSERT_LINK_GROUP_SQL, [email || ""]);
+          const createGroupResult = await runWebhookDbQuery(
+            "webhook:link_group_insert",
+            INSERT_LINK_GROUP_SQL,
+            [email || ""]
+          );
           groupId = createGroupResult.rows[0].id;
           groupBundleToken = await ensureBundlePublicTokenForGroup(groupId);
           console.log(
@@ -3938,14 +4139,14 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
             buildBundlecartLogContext({ bundleId: groupId, orderId, orderName, bundleToken: groupBundleToken })
           );
           console.log("BUNDLECART NETWORK FIRST ORDER FEE 5");
-          await dbPool.query(START_BUNDLECART_WINDOW_SQL, [
+          await runWebhookDbQuery("webhook:bundle_window_start", START_BUNDLECART_WINDOW_SQL, [
             groupId,
             paidAtTimestamp,
             addressHash,
             orderId,
             normalizedShopDomain
           ]);
-          await dbPool.query(UPDATE_LINK_GROUP_METADATA_SQL, [
+          await runWebhookDbQuery("webhook:link_group_update_metadata_new_window", UPDATE_LINK_GROUP_METADATA_SQL, [
             groupId,
             JSON.stringify(shippingAddress || {})
           ]);
@@ -3965,17 +4166,21 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
           })
         );
         console.log("DB STEP linked_orders insert");
-        const linkedOrderInsertResult = await dbPool.query(INSERT_LINKED_ORDER_SQL, [
-          groupId,
-          normalizedShopDomain,
-          orderId,
-          email || null,
-          true,
-          !existingWindowFound,
-          bundlecartFeeAmount,
-          addressHash,
-          createdAt
-        ]);
+        const linkedOrderInsertResult = await runWebhookDbQuery(
+          "webhook:linked_order_insert_bundlecart",
+          INSERT_LINKED_ORDER_SQL,
+          [
+            groupId,
+            normalizedShopDomain,
+            orderId,
+            email || null,
+            true,
+            !existingWindowFound,
+            bundlecartFeeAmount,
+            addressHash,
+            createdAt
+          ]
+        );
         if (linkedOrderInsertResult.rowCount > 0) {
           console.log("LINKED_ORDER INSERTED", orderId, groupId);
           console.log(
@@ -4049,31 +4254,35 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
       console.log("LINK SKIPPED no email", orderId);
     } else {
       console.log("DB STEP link_groups select");
-      const existingGroupResult = await dbPool.query(SELECT_RECENT_LINK_GROUP_SQL, [email]);
+      const existingGroupResult = await runWebhookDbQuery(
+        "webhook:legacy_link_group_lookup_by_email",
+        SELECT_RECENT_LINK_GROUP_SQL,
+        [email]
+      );
       if (existingGroupResult.rowCount > 0) {
         groupId = existingGroupResult.rows[0].id;
         console.log("DB STEP link_groups update");
-        await dbPool.query(UPDATE_LINK_GROUP_LAST_SEEN_SQL, [groupId]);
+        await runWebhookDbQuery("webhook:legacy_link_group_touch_last_seen", UPDATE_LINK_GROUP_LAST_SEEN_SQL, [
+          groupId
+        ]);
         console.log("LINK GROUP REUSED", groupId);
       } else {
         console.log("DB STEP link_groups insert");
-        const createGroupResult = await dbPool.query(INSERT_LINK_GROUP_SQL, [email]);
+        const createGroupResult = await runWebhookDbQuery(
+          "webhook:legacy_link_group_insert",
+          INSERT_LINK_GROUP_SQL,
+          [email]
+        );
         groupId = createGroupResult.rows[0].id;
         console.log("LINK GROUP CREATED", groupId);
       }
 
       console.log("DB STEP linked_orders insert");
-      const linkedOrderInsertResult = await dbPool.query(INSERT_LINKED_ORDER_SQL, [
-        groupId,
-        normalizedShopDomain,
-        orderId,
-        email,
-        false,
-        false,
-        0,
-        addressHash || null,
-        createdAt
-      ]);
+      const linkedOrderInsertResult = await runWebhookDbQuery(
+        "webhook:legacy_linked_order_insert",
+        INSERT_LINKED_ORDER_SQL,
+        [groupId, normalizedShopDomain, orderId, email, false, false, 0, addressHash || null, createdAt]
+      );
 
       if (linkedOrderInsertResult.rowCount > 0) {
         console.log("LINKED_ORDER INSERTED", orderId, groupId);
@@ -4101,7 +4310,7 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
     );
   }
   console.log("DB STEP shopify_orders insert");
-  const result = await dbPool.query(INSERT_SHOPIFY_ORDER_SQL, [
+  const result = await runWebhookDbQuery("webhook:shopify_order_insert", INSERT_SHOPIFY_ORDER_SQL, [
     normalizedShopDomain,
     orderId,
     order.email || null,
@@ -4181,6 +4390,18 @@ export function createApp() {
     const normalizedEmail = normalizeLookupEmail(email);
     let fallbackUsed = false;
     let resolvedBundleId = parseLookupBundleId(bundleId);
+    const runPublicLookupQuery = (queryName, text, values = [], maxRetries = 1) =>
+      dbQueryWithRetry({
+        queryName,
+        text,
+        values,
+        context: {
+          path: "/api/bundle",
+          orderId: "",
+          shopDomain: ""
+        },
+        maxRetries
+      });
 
     console.log("BUNDLE PUBLIC LOOKUP START", {
       bundleId: resolvedBundleId,
@@ -4208,7 +4429,11 @@ export function createApp() {
     let resolvedRows = [];
 
     if (resolvedBundleId != null) {
-      const byIdResult = await dbPool.query(SELECT_LINK_GROUP_BY_ID_SQL, [resolvedBundleId]);
+      const byIdResult = await runPublicLookupQuery(
+        "bundle_lookup:by_id",
+        SELECT_LINK_GROUP_BY_ID_SQL,
+        [resolvedBundleId]
+      );
       resolvedRows = byIdResult.rows;
     }
 
@@ -4218,12 +4443,18 @@ export function createApp() {
         bundleId: resolvedBundleId,
         email: normalizedEmail
       });
-      const fallbackResult = await dbPool.query(SELECT_RECENT_ACTIVE_LINK_GROUP_BY_EMAIL_SQL, [
-        normalizedEmail
-      ]);
+      const fallbackResult = await runPublicLookupQuery(
+        "bundle_lookup:fallback_recent_active_by_email",
+        SELECT_RECENT_ACTIVE_LINK_GROUP_BY_EMAIL_SQL,
+        [normalizedEmail]
+      );
       if (fallbackResult.rowCount > 0) {
         resolvedBundleId = Number(fallbackResult.rows[0].id);
-        const fallbackBundleResult = await dbPool.query(SELECT_LINK_GROUP_BY_ID_SQL, [resolvedBundleId]);
+        const fallbackBundleResult = await runPublicLookupQuery(
+          "bundle_lookup:fallback_bundle_by_id",
+          SELECT_LINK_GROUP_BY_ID_SQL,
+          [resolvedBundleId]
+        );
         resolvedRows = fallbackBundleResult.rows;
       }
     }
@@ -4407,6 +4638,18 @@ export function createApp() {
         const shopDomainHeader =
           req.get("x-shopify-shop-domain") || req.get("X-Shopify-Shop-Domain") || "";
         const normalizedRateShopDomain = normalizeShopDomain(shopDomainHeader);
+        const runRateDbQuery = (queryName, text, values = [], maxRetries = 1) =>
+          dbQueryWithRetry({
+            queryName,
+            text,
+            values,
+            context: {
+              path: "/api/shipping/rates",
+              shopDomain: normalizedRateShopDomain,
+              orderId: ""
+            },
+            maxRetries
+          });
         parsedPayload = parseRatePayload();
         const buildRateLogContext = (extra = {}) => ({
           timestamp: new Date().toISOString(),
@@ -4455,7 +4698,9 @@ export function createApp() {
         }
 
         const activeGroupResult = await withTimeout(
-          dbPool.query(SELECT_ACTIVE_BUNDLE_GROUP_BY_ADDRESS_SQL, [addressHash]),
+          runRateDbQuery("rate:bundle_lookup_active_by_address", SELECT_ACTIVE_BUNDLE_GROUP_BY_ADDRESS_SQL, [
+            addressHash
+          ]),
           rateRequestTimeoutMs,
           "bundlecart_rate_active_group_lookup_timeout"
         );
@@ -4505,7 +4750,7 @@ export function createApp() {
         }
 
         const recentHashesResult = await withTimeout(
-          dbPool.query(SELECT_RECENT_ACTIVE_BUNDLE_HASHES_SQL, [5]),
+          runRateDbQuery("rate:recent_active_bundle_hashes", SELECT_RECENT_ACTIVE_BUNDLE_HASHES_SQL, [5]),
           rateRequestTimeoutMs,
           "bundlecart_rate_recent_hashes_lookup_timeout"
         );
@@ -4515,7 +4760,9 @@ export function createApp() {
         console.log("BUNDLECART MATCH RESULT", false);
 
         const latestGroupResult = await withTimeout(
-          dbPool.query(SELECT_LATEST_BUNDLE_GROUP_BY_ADDRESS_SQL, [addressHash]),
+          runRateDbQuery("rate:latest_bundle_group_by_address", SELECT_LATEST_BUNDLE_GROUP_BY_ADDRESS_SQL, [
+            addressHash
+          ]),
           rateRequestTimeoutMs,
           "bundlecart_rate_latest_group_lookup_timeout"
         );
@@ -4604,7 +4851,17 @@ export function createApp() {
       if (!dbPool) {
         throw new Error("DATABASE_URL not configured");
       }
-      await dbPool.query(UPSERT_MERCHANT_TOKEN_SQL, [shop, accessToken]);
+      await dbQueryWithRetry({
+        queryName: "auth_callback:merchant_token_upsert",
+        text: UPSERT_MERCHANT_TOKEN_SQL,
+        values: [shop, accessToken],
+        context: {
+          path: "/auth/callback",
+          shopDomain: shop,
+          orderId: ""
+        },
+        maxRetries: 1
+      });
       console.log("MERCHANT TOKEN SAVE OK", shop);
       await checkShopifyWriteOrdersScope(shop, accessToken);
 
@@ -4659,7 +4916,17 @@ export function createApp() {
     }
 
     try {
-      const merchantResult = await dbPool.query(SELECT_MERCHANT_ACCESS_TOKEN_SQL, [shop]);
+      const merchantResult = await dbQueryWithRetry({
+        queryName: "billing_subscribe:merchant_access_token_lookup",
+        text: SELECT_MERCHANT_ACCESS_TOKEN_SQL,
+        values: [shop],
+        context: {
+          path: "/billing/subscribe",
+          shopDomain: shop,
+          orderId: ""
+        },
+        maxRetries: 1
+      });
       const accessToken = String(merchantResult.rows[0]?.access_token || "").trim();
       if (!accessToken) {
         res.redirect(`/auth?shop=${encodeURIComponent(shop)}`);
@@ -4712,7 +4979,17 @@ export function createApp() {
     }
 
     try {
-      const merchantResult = await dbPool.query(SELECT_MERCHANT_ACCESS_TOKEN_SQL, [shop]);
+      const merchantResult = await dbQueryWithRetry({
+        queryName: "billing_callback:merchant_access_token_lookup",
+        text: SELECT_MERCHANT_ACCESS_TOKEN_SQL,
+        values: [shop],
+        context: {
+          path: "/billing/callback",
+          shopDomain: shop,
+          orderId: ""
+        },
+        maxRetries: 1
+      });
       const accessToken = String(merchantResult.rows[0]?.access_token || "").trim();
       if (!accessToken) {
         res.redirect(`/auth?shop=${encodeURIComponent(shop)}`);
@@ -4864,8 +5141,22 @@ export function createApp() {
     try {
       let fallbackUsed = false;
       let tokenMatched = false;
+      const runTokenLookupQuery = (queryName, text, values = [], maxRetries = 1) =>
+        dbQueryWithRetry({
+          queryName,
+          text,
+          values,
+          context: {
+            path: "/api/bundle/:token",
+            shopDomain: "",
+            orderId: ""
+          },
+          maxRetries
+        });
 
-      let result = token ? await dbPool.query(SELECT_LINK_GROUP_BY_TOKEN_SQL, [token]) : { rows: [] };
+      let result = token
+        ? await runTokenLookupQuery("bundle_lookup:by_token", SELECT_LINK_GROUP_BY_TOKEN_SQL, [token])
+        : { rows: [] };
       tokenMatched = result.rows.length > 0;
 
       if (result.rows.length === 0 && lookupEmail) {
@@ -4874,10 +5165,18 @@ export function createApp() {
           token,
           email: lookupEmail
         });
-        const fallbackResult = await dbPool.query(SELECT_RECENT_ACTIVE_LINK_GROUP_BY_EMAIL_SQL, [lookupEmail]);
+        const fallbackResult = await runTokenLookupQuery(
+          "bundle_lookup:token_fallback_recent_active_by_email",
+          SELECT_RECENT_ACTIVE_LINK_GROUP_BY_EMAIL_SQL,
+          [lookupEmail]
+        );
         if (fallbackResult.rowCount > 0) {
           const fallbackBundleId = Number(fallbackResult.rows[0].id);
-          result = await dbPool.query(SELECT_LINK_GROUP_BY_ID_SQL, [fallbackBundleId]);
+          result = await runTokenLookupQuery(
+            "bundle_lookup:token_fallback_bundle_by_id",
+            SELECT_LINK_GROUP_BY_ID_SQL,
+            [fallbackBundleId]
+          );
         }
       }
 
@@ -4926,7 +5225,24 @@ export function createApp() {
     }
 
     try {
-      const merchantResult = await dbPool.query(SELECT_MERCHANT_ACCESS_TOKEN_SQL, [shop]);
+      const runMerchantDashboardQuery = (queryName, text, values = [], maxRetries = 1) =>
+        dbQueryWithRetry({
+          queryName,
+          text,
+          values,
+          context: {
+            path: "/api/merchant/dashboard",
+            shopDomain: shop,
+            orderId: ""
+          },
+          maxRetries
+        });
+
+      const merchantResult = await runMerchantDashboardQuery(
+        "merchant_dashboard:merchant_access_token_lookup",
+        SELECT_MERCHANT_ACCESS_TOKEN_SQL,
+        [shop]
+      );
       const accessToken = String(merchantResult.rows[0]?.access_token || "").trim();
       if (!accessToken) {
         res.status(401).json({ ok: false, message: "Merchant auth required" });
@@ -4948,7 +5264,11 @@ export function createApp() {
         return;
       }
 
-      const result = await dbPool.query(SELECT_MERCHANT_DASHBOARD_METRICS_SQL, [shop]);
+      const result = await runMerchantDashboardQuery(
+        "merchant_dashboard:metrics_lookup",
+        SELECT_MERCHANT_DASHBOARD_METRICS_SQL,
+        [shop]
+      );
       const row = result.rows[0] || {};
       const payload = {
         bundles_created: Number(row.bundles_created || 0),
@@ -5083,7 +5403,23 @@ export function createApp() {
     }
 
     try {
-      const merchantResult = await dbPool.query(SELECT_MERCHANT_ACCESS_TOKEN_SQL, [shop]);
+      const runMerchantActivityQuery = (queryName, text, values = [], maxRetries = 1) =>
+        dbQueryWithRetry({
+          queryName,
+          text,
+          values,
+          context: {
+            path: "/api/merchant/activity",
+            shopDomain: shop,
+            orderId: ""
+          },
+          maxRetries
+        });
+      const merchantResult = await runMerchantActivityQuery(
+        "merchant_activity:merchant_access_token_lookup",
+        SELECT_MERCHANT_ACCESS_TOKEN_SQL,
+        [shop]
+      );
       const accessToken = String(merchantResult.rows[0]?.access_token || "").trim();
       if (!accessToken) {
         res.status(401).json({ ok: false, message: "Merchant auth required" });
@@ -5105,7 +5441,11 @@ export function createApp() {
         return;
       }
 
-      const result = await dbPool.query(SELECT_MERCHANT_RECENT_ACTIVITY_SQL, [shop]);
+      const result = await runMerchantActivityQuery(
+        "merchant_activity:recent_activity_lookup",
+        SELECT_MERCHANT_RECENT_ACTIVITY_SQL,
+        [shop]
+      );
       const activity = result.rows.map((row) => ({
         date: row.activity_at ? new Date(row.activity_at).toISOString() : null,
         bundle_id: Number(row.bundle_id || 0),
