@@ -322,7 +322,7 @@ LIMIT 1;
 `;
 
 const SELECT_ACTIVE_BUNDLE_GROUP_BY_ADDRESS_SQL = `
-SELECT lg.id, lg.email, lg.active_until, lg.address_hash
+SELECT lg.id, lg.email, lg.active_until, lg.address_hash, lg.first_shop_domain
 FROM link_groups lg
 WHERE lg.address_hash = $1::text
   AND lg.active_until > NOW()
@@ -331,7 +331,7 @@ LIMIT 1;
 `;
 
 const SELECT_LATEST_BUNDLE_GROUP_BY_ADDRESS_SQL = `
-SELECT lg.id, lg.email, lg.active_until, lg.address_hash
+SELECT lg.id, lg.email, lg.active_until, lg.address_hash, lg.first_shop_domain
 FROM link_groups lg
 WHERE lg.address_hash = $1::text
 ORDER BY COALESCE(lg.active_until, lg.created_at) DESC
@@ -1123,6 +1123,14 @@ function normalizeProvinceCode(value) {
   return PROVINCE_CODE_NORMALIZATION[normalized] || normalized;
 }
 
+function normalizePostalCode(value) {
+  const normalized = normalizeAddressValue(value);
+  if (!normalized) {
+    return "";
+  }
+  return normalized.replace(/\s+/g, "");
+}
+
 function buildCanonicalAddress(address) {
   const normalized = normalizeAddress(address);
   return {
@@ -1143,19 +1151,12 @@ function buildCanonicalAddress(address) {
 function normalizeAddress(addr) {
   const input = addr && typeof addr === "object" ? addr : {};
   return {
-    address1: String(input.address1 || "")
-      .trim()
-      .toLowerCase(),
-    city: String(input.city || "")
-      .trim()
-      .toLowerCase(),
-    province: String(input.province_code || input.province || "")
-      .trim()
-      .toLowerCase(),
-    postal_code: String(input.postal_code || input.zip || "").trim(),
-    country: String(input.country_code || input.country || "")
-      .trim()
-      .toLowerCase()
+    // Address-based bundle identity intentionally excludes name/address2/phone/email.
+    address1: normalizeAddressValue(input.address1),
+    city: normalizeAddressValue(input.city),
+    province: normalizeProvinceCode(input.province_code || input.province),
+    postal_code: normalizePostalCode(input.postal_code || input.zip),
+    country: normalizeCountryCode(input.country_code || input.country)
   };
 }
 
@@ -2953,9 +2954,19 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
     hasRequired: hasRequiredAddress
   } = buildCanonicalAddress(shippingAddress);
   const addressHash = hasRequiredAddress ? hashAddressCanonical(canonicalAddress) : "";
+  const buildBundlecartLogContext = (extra = {}) => ({
+    timestamp: new Date().toISOString(),
+    shopDomain: normalizedShopDomain || "",
+    addressHash: addressHash || "",
+    ...extra
+  });
   console.log("BUNDLECART WEBHOOK CANONICAL ADDRESS", canonicalAddress);
   console.log("BUNDLECART NORMALIZED ADDRESS", normalizedAddress);
   console.log("BUNDLECART ADDRESS HASH", addressHash || "");
+  console.log(
+    "BUNDLECART NORMALIZED ADDRESS CONTEXT",
+    buildBundlecartLogContext({ normalizedAddress })
+  );
   const bundleCartSelection = extractBundleCartSelection(order);
   const bundlecartSelected = bundleCartSelection.selected;
   const bundlecartFeeAmount = Number(bundleCartSelection.amount || 0);
@@ -2991,10 +3002,11 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
 
   if (bundlecartSelected) {
     if (!addressHash) {
-      console.log("BUNDLECART ADDRESS MISMATCH");
+      console.log("BUNDLECART ADDRESS MISMATCH", buildBundlecartLogContext({ orderId }));
     } else {
       let groupId = null;
       let existingWindowFound = false;
+      let newBundleReason = "no_active_bundle_found";
 
       console.log("DB STEP link_groups select active_by_address");
       const activeGroupResult = await dbPool.query(SELECT_ACTIVE_BUNDLE_GROUP_BY_ADDRESS_SQL, [
@@ -3003,14 +3015,39 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
       if (activeGroupResult.rowCount > 0) {
         existingWindowFound = true;
         groupId = activeGroupResult.rows[0].id;
+        const existingFirstShopDomain = normalizeShopDomain(activeGroupResult.rows[0].first_shop_domain);
         console.log("BUNDLECART EXISTING HASH", activeGroupResult.rows[0].address_hash || "");
         console.log(
           "BUNDLECART MATCH RESULT",
           String(activeGroupResult.rows[0].address_hash || "") === String(addressHash || "")
         );
-        console.log("BUNDLECART EXISTING BUNDLE WINDOW FOUND", groupId);
-        console.log("BUNDLECART ORDER LINKED TO EXISTING GROUP", orderId, groupId);
-        console.log("BUNDLECART NETWORK LINKED ORDER FREE");
+        console.log(
+          "BUNDLECART EXISTING BUNDLE WINDOW FOUND",
+          buildBundlecartLogContext({ bundleId: groupId, orderId })
+        );
+        if (
+          existingFirstShopDomain &&
+          normalizedShopDomain &&
+          existingFirstShopDomain !== normalizedShopDomain
+        ) {
+          console.log(
+            "BUNDLECART CROSS-STORE BUNDLE DETECTED",
+            buildBundlecartLogContext({
+              bundleId: groupId,
+              firstShopDomain: existingFirstShopDomain,
+              currentShopDomain: normalizedShopDomain,
+              orderId
+            })
+          );
+        }
+        console.log(
+          "BUNDLECART ORDER LINKED TO EXISTING GROUP",
+          buildBundlecartLogContext({ bundleId: groupId, orderId })
+        );
+        console.log(
+          "BUNDLECART NETWORK LINKED ORDER FREE",
+          buildBundlecartLogContext({ bundleId: groupId, orderId })
+        );
         await dbPool.query(UPDATE_LINK_GROUP_LAST_SEEN_SQL, [groupId]);
         await dbPool.query(UPDATE_LINK_GROUP_METADATA_SQL, [
           groupId,
@@ -3027,34 +3064,109 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
           }
         }
         console.log("BUNDLECART MATCH RESULT", false);
-        const latestGroupResult = await dbPool.query(SELECT_LATEST_BUNDLE_GROUP_BY_ADDRESS_SQL, [
+        const activeGroupRecheckResult = await dbPool.query(SELECT_ACTIVE_BUNDLE_GROUP_BY_ADDRESS_SQL, [
           addressHash
         ]);
-        if (latestGroupResult.rowCount > 0) {
-          const latestActiveUntil = latestGroupResult.rows[0].active_until;
-          if (latestActiveUntil && new Date(latestActiveUntil).getTime() <= Date.now()) {
-            console.log("BUNDLECART WINDOW EXPIRED, STARTING NEW BUNDLE");
+        if (activeGroupRecheckResult.rowCount > 0) {
+          existingWindowFound = true;
+          groupId = activeGroupRecheckResult.rows[0].id;
+          const existingFirstShopDomain = normalizeShopDomain(
+            activeGroupRecheckResult.rows[0].first_shop_domain
+          );
+          console.log(
+            "BUNDLECART DUPLICATE BUNDLE PREVENTED REUSED ACTIVE GROUP",
+            buildBundlecartLogContext({ bundleId: groupId, orderId })
+          );
+          console.log(
+            "BUNDLECART EXISTING BUNDLE WINDOW FOUND",
+            buildBundlecartLogContext({ bundleId: groupId, orderId })
+          );
+          if (
+            existingFirstShopDomain &&
+            normalizedShopDomain &&
+            existingFirstShopDomain !== normalizedShopDomain
+          ) {
+            console.log(
+              "BUNDLECART CROSS-STORE BUNDLE DETECTED",
+              buildBundlecartLogContext({
+                bundleId: groupId,
+                firstShopDomain: existingFirstShopDomain,
+                currentShopDomain: normalizedShopDomain,
+                orderId
+              })
+            );
           }
-        }
+          console.log(
+            "BUNDLECART ORDER LINKED TO EXISTING GROUP",
+            buildBundlecartLogContext({ bundleId: groupId, orderId })
+          );
+          console.log(
+            "BUNDLECART NETWORK LINKED ORDER FREE",
+            buildBundlecartLogContext({ bundleId: groupId, orderId })
+          );
+          await dbPool.query(UPDATE_LINK_GROUP_LAST_SEEN_SQL, [groupId]);
+          await dbPool.query(UPDATE_LINK_GROUP_METADATA_SQL, [
+            groupId,
+            JSON.stringify(shippingAddress || {})
+          ]);
+          console.log("BUNDLECART CUSTOMER ADDRESS STORED");
+        } else {
+          const latestGroupResult = await dbPool.query(SELECT_LATEST_BUNDLE_GROUP_BY_ADDRESS_SQL, [
+            addressHash
+          ]);
+          if (latestGroupResult.rowCount > 0) {
+            newBundleReason = "previous_bundle_expired";
+            const latestBundleId = latestGroupResult.rows[0].id;
+            const latestActiveUntil = latestGroupResult.rows[0].active_until;
+            if (latestActiveUntil && new Date(latestActiveUntil).getTime() <= Date.now()) {
+              console.log(
+                "BUNDLECART WINDOW EXPIRED, STARTING NEW BUNDLE",
+                buildBundlecartLogContext({
+                  previousBundleId: latestBundleId,
+                  previousActiveUntil: latestActiveUntil,
+                  orderId
+                })
+              );
+            }
+          }
 
-        console.log("DB STEP link_groups insert");
-        const createGroupResult = await dbPool.query(INSERT_LINK_GROUP_SQL, [email || ""]);
-        groupId = createGroupResult.rows[0].id;
-        await ensureBundlePublicTokenForGroup(groupId);
-        console.log("BUNDLECART NEW BUNDLE WINDOW CREATED", groupId);
-        console.log("BUNDLECART NETWORK FIRST ORDER FEE 5");
-        await dbPool.query(START_BUNDLECART_WINDOW_SQL, [
-          groupId,
-          paidAtTimestamp,
-          addressHash,
-          orderId,
-          normalizedShopDomain
-        ]);
-        await dbPool.query(UPDATE_LINK_GROUP_METADATA_SQL, [
-          groupId,
-          JSON.stringify(shippingAddress || {})
-        ]);
-        console.log("BUNDLECART CUSTOMER ADDRESS STORED");
+          console.log("DB STEP link_groups insert");
+          const createGroupResult = await dbPool.query(INSERT_LINK_GROUP_SQL, [email || ""]);
+          groupId = createGroupResult.rows[0].id;
+          await ensureBundlePublicTokenForGroup(groupId);
+          console.log(
+            "BUNDLECART FIRST BUNDLE CREATED",
+            buildBundlecartLogContext({ bundleId: groupId, orderId })
+          );
+          if (newBundleReason === "previous_bundle_expired") {
+            console.log(
+              "BUNDLECART NEW BUNDLE CREATED BECAUSE PREVIOUS BUNDLE EXPIRED",
+              buildBundlecartLogContext({ bundleId: groupId, orderId })
+            );
+          } else {
+            console.log(
+              "BUNDLECART NEW BUNDLE CREATED BECAUSE NO ACTIVE BUNDLE FOUND",
+              buildBundlecartLogContext({ bundleId: groupId, orderId })
+            );
+          }
+          console.log(
+            "BUNDLECART NEW BUNDLE WINDOW CREATED",
+            buildBundlecartLogContext({ bundleId: groupId, orderId })
+          );
+          console.log("BUNDLECART NETWORK FIRST ORDER FEE 5");
+          await dbPool.query(START_BUNDLECART_WINDOW_SQL, [
+            groupId,
+            paidAtTimestamp,
+            addressHash,
+            orderId,
+            normalizedShopDomain
+          ]);
+          await dbPool.query(UPDATE_LINK_GROUP_METADATA_SQL, [
+            groupId,
+            JSON.stringify(shippingAddress || {})
+          ]);
+          console.log("BUNDLECART CUSTOMER ADDRESS STORED");
+        }
       }
 
       if (groupId != null) {
@@ -3072,7 +3184,10 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
         ]);
         if (linkedOrderInsertResult.rowCount > 0) {
           console.log("LINKED_ORDER INSERTED", orderId, groupId);
-          console.log("BUNDLECART BUNDLE LINKED", orderId, groupId);
+          console.log(
+            "BUNDLECART BUNDLE LINKED",
+            buildBundlecartLogContext({ bundleId: groupId, orderId })
+          );
           if (existingWindowFound) {
             bundleOrderAddedEmailGroupId = groupId;
           } else {
@@ -3400,6 +3515,7 @@ export function createApp() {
     const fallbackStandardExpressOnly = (error, parsedPayloadForCurrency = {}) => {
       const fallbackCurrency = deriveCurrency(parsedPayloadForCurrency);
       console.error("BundleCart fallback triggered", {
+        timestamp: new Date().toISOString(),
         message: error?.message || String(error),
         stack: error?.stack || null
       });
@@ -3420,7 +3536,13 @@ export function createApp() {
       try {
         const shopDomainHeader =
           req.get("x-shopify-shop-domain") || req.get("X-Shopify-Shop-Domain") || "";
+        const normalizedRateShopDomain = normalizeShopDomain(shopDomainHeader);
         parsedPayload = parseRatePayload();
+        const buildRateLogContext = (extra = {}) => ({
+          timestamp: new Date().toISOString(),
+          shopDomain: normalizedRateShopDomain || "",
+          ...extra
+        });
 
         const keys =
           parsedPayload && typeof parsedPayload === "object" && !Array.isArray(parsedPayload)
@@ -3428,7 +3550,7 @@ export function createApp() {
             : [];
         console.log("BUNDLECART RATE REQUEST", {
           keys,
-          shop_domain: normalizeShopDomain(shopDomainHeader)
+          shop_domain: normalizedRateShopDomain
         });
 
         const rate = parsedPayload?.rate && typeof parsedPayload.rate === "object" ? parsedPayload.rate : {};
@@ -3469,13 +3591,39 @@ export function createApp() {
         );
         if (activeGroupResult.rowCount > 0) {
           const activeGroupId = activeGroupResult.rows[0].id;
+          const existingFirstShopDomain = normalizeShopDomain(activeGroupResult.rows[0].first_shop_domain);
           console.log("BUNDLECART EXISTING HASH", activeGroupResult.rows[0].address_hash || "");
           console.log(
             "BUNDLECART MATCH RESULT",
             String(activeGroupResult.rows[0].address_hash || "") === String(addressHash || "")
           );
-          console.log("BUNDLECART EXISTING BUNDLE WINDOW FOUND", activeGroupId);
-          console.log("BUNDLECART NETWORK LINKED ORDER FREE");
+          console.log(
+            "BUNDLECART EXISTING BUNDLE WINDOW FOUND",
+            buildRateLogContext({ addressHash, bundleId: activeGroupId })
+          );
+          if (
+            existingFirstShopDomain &&
+            normalizedRateShopDomain &&
+            existingFirstShopDomain !== normalizedRateShopDomain
+          ) {
+            console.log(
+              "BUNDLECART CROSS-STORE BUNDLE DETECTED",
+              buildRateLogContext({
+                addressHash,
+                bundleId: activeGroupId,
+                firstShopDomain: existingFirstShopDomain,
+                currentShopDomain: normalizedRateShopDomain
+              })
+            );
+          }
+          console.log(
+            "BUNDLECART FREE SHIPPING APPLIED",
+            buildRateLogContext({ addressHash, bundleId: activeGroupId })
+          );
+          console.log(
+            "BUNDLECART NETWORK LINKED ORDER FREE",
+            buildRateLogContext({ addressHash, bundleId: activeGroupId })
+          );
           console.log("BundleCart success", {
             eligibleFree: true,
             groupId: activeGroupId,
@@ -3502,9 +3650,17 @@ export function createApp() {
           "bundlecart_rate_latest_group_lookup_timeout"
         );
         if (latestGroupResult.rowCount > 0) {
+          const latestBundleId = latestGroupResult.rows[0].id;
           const latestActiveUntil = latestGroupResult.rows[0].active_until;
           if (latestActiveUntil && new Date(latestActiveUntil).getTime() <= Date.now()) {
-            console.log("BUNDLECART WINDOW EXPIRED, STARTING NEW BUNDLE");
+            console.log(
+              "BUNDLECART WINDOW EXPIRED, STARTING NEW BUNDLE",
+              buildRateLogContext({
+                addressHash,
+                previousBundleId: latestBundleId,
+                previousActiveUntil: latestActiveUntil
+              })
+            );
           }
         }
 
