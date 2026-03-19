@@ -17,42 +17,73 @@ const KPI_DEFINITIONS = [
   {
     key: "bundles_created",
     title: "Bundles Created",
-    tooltip: "Bundles where the first BundleCart order was placed at this store."
+    tooltip: "Bundles where the first BundleCart order was placed at this store.",
+    definition:
+      "Number of first qualifying BundleCart orders started by this store."
   },
   {
     key: "orders_bundled",
     title: "Orders Bundled",
-    tooltip: "All this store's orders that are part of any BundleCart bundle."
+    tooltip: "All this store's orders that are part of any BundleCart bundle.",
+    definition:
+      "Total orders from this store that were part of a BundleCart window."
   },
   {
     key: "extra_orders_generated",
     title: "Extra Orders Generated",
-    tooltip: "Incremental orders beyond the first order in bundles for this store."
+    tooltip: "Incremental orders beyond the first order in bundles for this store.",
+    definition:
+      "Bundled orders beyond the first order in each bundle started by this store."
   },
   {
     key: "network_orders",
     title: "Network Orders",
-    tooltip: "Orders at this store that joined bundles started by other stores."
+    tooltip: "Orders at this store that joined bundles started by other stores.",
+    definition:
+      "Orders this store received from active BundleCart traffic started elsewhere."
   },
   {
     key: "avg_orders_per_bundle",
     title: "Average Orders Per Bundle",
-    tooltip: "Average order count across bundles created by this store."
+    tooltip: "Average order count across bundles created by this store.",
+    definition:
+      "Total orders in bundles started by this store divided by bundles created."
   },
   {
     key: "bundlecart_fees_collected",
     title: "BundleCart Fees Collected",
-    tooltip: "Total customer-paid BundleCart first-order fees for bundles created here."
+    tooltip: "Total customer-paid BundleCart first-order fees for bundles created here.",
+    definition:
+      "Total qualifying BundleCart first-order fees linked to bundles started by this store."
   }
 ];
+
+function formatDashboardDate(value) {
+  if (!value) {
+    return "—";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return "—";
+  }
+  return parsed.toLocaleString();
+}
+
+function normalizeMetricNumber(value) {
+  const numeric = Number(value || 0);
+  return Number.isFinite(numeric) ? numeric : 0;
+}
 
 export default function MerchantDashboardPage() {
   const [searchParams] = useSearchParams();
   const shop = String(searchParams.get("shop") || "")
     .trim()
     .toLowerCase();
+  const isEmbedded = String(searchParams.get("embedded") || "").trim() === "1";
+  const hasHostParam = Boolean(String(searchParams.get("host") || "").trim());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [activityError, setActivityError] = useState("");
   const [metrics, setMetrics] = useState({
     bundles_created: 0,
     orders_bundled: 0,
@@ -61,9 +92,13 @@ export default function MerchantDashboardPage() {
     avg_orders_per_bundle: 0,
     bundlecart_fees_collected: 0
   });
+  const [recentActivity, setRecentActivity] = useState([]);
 
   useEffect(() => {
     let mounted = true;
+    setLoading(true);
+    setError("");
+    setActivityError("");
     if (!shop) {
       setLoading(false);
       setError("Missing shop query parameter.");
@@ -72,26 +107,33 @@ export default function MerchantDashboardPage() {
       };
     }
 
-    api
-      .getMerchantDashboard(shop)
-      .then((payload) => {
+    Promise.allSettled([api.getMerchantDashboard(shop), api.getMerchantDashboardActivity(shop)])
+      .then((results) => {
         if (!mounted) {
           return;
         }
-        setMetrics({
-          bundles_created: Number(payload?.bundles_created || 0),
-          orders_bundled: Number(payload?.orders_bundled || 0),
-          extra_orders_generated: Number(payload?.extra_orders_generated || 0),
-          network_orders: Number(payload?.network_orders || 0),
-          avg_orders_per_bundle: Number(payload?.avg_orders_per_bundle || 0),
-          bundlecart_fees_collected: Number(payload?.bundlecart_fees_collected || 0)
-        });
-      })
-      .catch((requestError) => {
-        if (!mounted) {
-          return;
+
+        const [metricsResult, activityResult] = results;
+        if (metricsResult.status === "fulfilled") {
+          const payload = metricsResult.value || {};
+          setMetrics({
+            bundles_created: normalizeMetricNumber(payload?.bundles_created),
+            orders_bundled: normalizeMetricNumber(payload?.orders_bundled),
+            extra_orders_generated: normalizeMetricNumber(payload?.extra_orders_generated),
+            network_orders: normalizeMetricNumber(payload?.network_orders),
+            avg_orders_per_bundle: normalizeMetricNumber(payload?.avg_orders_per_bundle),
+            bundlecart_fees_collected: normalizeMetricNumber(payload?.bundlecart_fees_collected)
+          });
+        } else {
+          setError(metricsResult.reason?.message || "Failed to load dashboard.");
         }
-        setError(requestError.message || "Failed to load dashboard.");
+
+        if (activityResult.status === "fulfilled") {
+          const rows = Array.isArray(activityResult.value?.activity) ? activityResult.value.activity : [];
+          setRecentActivity(rows);
+        } else {
+          setActivityError(activityResult.reason?.message || "Failed to load recent activity.");
+        }
       })
       .finally(() => {
         if (!mounted) {
@@ -109,36 +151,169 @@ export default function MerchantDashboardPage() {
     () =>
       KPI_DEFINITIONS.map((definition) => ({
         ...definition,
+        numericValue: normalizeMetricNumber(metrics[definition.key]),
         value: formatMetricValue(definition.key, metrics[definition.key])
       })),
     [metrics]
   );
+  const hasAnyMetricData = cards.some((card) => card.numericValue > 0);
+  const hasActivityData = recentActivity.length > 0;
+  const showEmptyState = !loading && !error && !hasAnyMetricData && !hasActivityData;
+
+  const insights = useMemo(() => {
+    const bundlesCreated = normalizeMetricNumber(metrics.bundles_created);
+    const extraOrdersGenerated = normalizeMetricNumber(metrics.extra_orders_generated);
+    const avgOrdersPerBundle = normalizeMetricNumber(metrics.avg_orders_per_bundle);
+    const networkOrders = normalizeMetricNumber(metrics.network_orders);
+    const bundlecartFeesCollected = normalizeMetricNumber(metrics.bundlecart_fees_collected);
+
+    const computedInsights = [];
+    if (extraOrdersGenerated > 0) {
+      computedInsights.push(`Your store generated ${extraOrdersGenerated} extra orders through BundleCart.`);
+    } else {
+      computedInsights.push(
+        "BundleCart will highlight incremental orders here as customers place linked follow-up purchases."
+      );
+    }
+
+    if (bundlesCreated > 0) {
+      computedInsights.push(`Average bundle size is ${avgOrdersPerBundle.toFixed(2)} orders.`);
+    } else {
+      computedInsights.push("Average bundle size will appear after your first bundle is created.");
+    }
+
+    if (networkOrders > 0) {
+      computedInsights.push(`You received ${networkOrders} network orders from BundleCart traffic.`);
+    } else {
+      computedInsights.push("Network order insights will appear once cross-store bundle traffic starts.");
+    }
+
+    if (bundlecartFeesCollected > 0) {
+      computedInsights.push(
+        `Your store has collected $${bundlecartFeesCollected.toFixed(2)} in qualifying BundleCart first-order fees.`
+      );
+    } else {
+      computedInsights.push("BundleCart fee collection totals will populate as qualifying first orders arrive.");
+    }
+
+    return computedInsights;
+  }, [metrics]);
 
   return (
-    <div className="page">
-      <div className="page-header merchant-dashboard-header">
+    <div className="page merchant-dashboard-page">
+      <div className="page-header merchant-dashboard-header card compact-card">
         <div className="merchant-dashboard-brand">
           <img src="/logo.png" alt="BundleCart" />
           <div>
-            <h3>BundleCart</h3>
-            <p className="subtle">Store Performance Dashboard</p>
+            <h3>BundleCart Dashboard</h3>
+            <p className="subtle">Merchant performance and bundle growth</p>
           </div>
+        </div>
+        <div className="merchant-dashboard-context">
+          <strong>{shop || "Unknown store"}</strong>
+          <span className="subtle">
+            {isEmbedded || hasHostParam ? "Shopify Admin embedded view" : "Direct dashboard view"}
+          </span>
         </div>
       </div>
 
-      {shop ? <p className="subtle">Store: {shop}</p> : null}
       {error ? <p className="inline-error">{error}</p> : null}
       {loading ? <p>Loading dashboard metrics...</p> : null}
 
       {!loading && !error ? (
-        <div className="stats-grid">
-          {cards.map((card) => (
-            <article key={card.key} className="card stat-card">
-              <p title={card.tooltip}>{card.title}</p>
-              <strong>{card.value}</strong>
-            </article>
-          ))}
-        </div>
+        <>
+          <section className="stats-grid merchant-kpi-grid">
+            {cards.map((card) => (
+              <article key={card.key} className="card stat-card merchant-kpi-card">
+                <p title={card.tooltip}>{card.title}</p>
+                <strong>{card.value}</strong>
+              </article>
+            ))}
+          </section>
+
+          <section className="card merchant-dashboard-section">
+            <div className="card-header-inline">
+              <h4>KPI definitions</h4>
+            </div>
+            <div className="merchant-kpi-definitions">
+              {cards.map((card) => (
+                <article key={`def-${card.key}`} className="merchant-definition-item">
+                  <strong>{card.title}</strong>
+                  <p className="subtle">{card.definition}</p>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <section className="card merchant-dashboard-section">
+            <div className="card-header-inline">
+              <h4>Store performance insights</h4>
+            </div>
+            <ul className="merchant-insights-list">
+              {insights.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          </section>
+
+          <section className="card merchant-dashboard-section">
+            <div className="card-header-inline">
+              <h4>Recent bundle activity</h4>
+            </div>
+            {activityError ? <p className="inline-error">{activityError}</p> : null}
+            {!activityError && !hasActivityData ? (
+              <p className="subtle">
+                No recent activity yet. Bundle events from this store will appear here as orders are linked.
+              </p>
+            ) : null}
+            {!activityError && hasActivityData ? (
+              <div className="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Bundle ID</th>
+                      <th>Order ID</th>
+                      <th>Store</th>
+                      <th>Bundle status</th>
+                      <th>Source</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recentActivity.map((row, index) => (
+                      <tr key={`${row.bundle_id}-${row.order_id}-${index}`}>
+                        <td>{formatDashboardDate(row.date)}</td>
+                        <td>{row.bundle_id || "—"}</td>
+                        <td>{row.order_id || "—"}</td>
+                        <td>{row.store || shop || "—"}</td>
+                        <td>
+                          <span
+                            className={`status-pill ${
+                              row.bundle_status === "active" ? "status-open" : "status-expired"
+                            }`}
+                          >
+                            {row.bundle_status === "active" ? "active" : "expired"}
+                          </span>
+                        </td>
+                        <td>{row.bundle_source || "BundleCart network"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+          </section>
+
+          {showEmptyState ? (
+            <section className="card merchant-empty-state">
+              <h4>Your dashboard is getting ready</h4>
+              <p className="subtle">
+                Once your first qualifying BundleCart orders arrive, you will see KPI trends, bundle activity, and
+                network performance insights here.
+              </p>
+            </section>
+          ) : null}
+        </>
       ) : null}
     </div>
   );

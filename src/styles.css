@@ -37,6 +37,10 @@ a {
   grid-template-columns: 264px 1fr;
 }
 
+.app-shell-merchant {
+  grid-template-columns: 1fr;
+}
+
 .sidebar {
   background: #102a42;
   color: #fff;
@@ -80,6 +84,10 @@ a {
 .main {
   display: flex;
   flex-direction: column;
+}
+
+.main-merchant .page-content {
+  padding: 16px 20px 20px;
 }
 
 .topbar {
@@ -1148,7 +1156,11 @@ input:focus {
 }
 
 .merchant-dashboard-header {
-  justify-content: flex-start;
+  justify-content: space-between;
+  align-items: center;
+  background: #fff;
+  border: 1px solid #e8e2ff;
+  box-shadow: 0 8px 16px rgba(31, 22, 59, 0.05);
 }
 
 .merchant-dashboard-brand {
@@ -1174,9 +1186,80 @@ input:focus {
   margin-top: 2px;
 }
 
+.merchant-dashboard-page {
+  gap: 14px;
+}
+
+.merchant-dashboard-context {
+  display: grid;
+  gap: 2px;
+  justify-items: end;
+  text-align: right;
+}
+
+.merchant-dashboard-context strong {
+  color: #3f287e;
+  font-size: 0.94rem;
+}
+
+.merchant-kpi-grid {
+  grid-template-columns: repeat(3, minmax(170px, 1fr));
+  gap: 10px;
+}
+
+.merchant-kpi-card {
+  border-color: #e7e1ff;
+  box-shadow: 0 8px 15px rgba(40, 26, 86, 0.04);
+}
+
+.merchant-dashboard-section h4 {
+  margin: 0;
+  color: #281d49;
+}
+
+.merchant-kpi-definitions {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(200px, 1fr));
+}
+
+.merchant-definition-item {
+  border: 1px solid #ece7ff;
+  border-radius: 10px;
+  background: #faf8ff;
+  padding: 10px 12px;
+  display: grid;
+  gap: 4px;
+}
+
+.merchant-definition-item strong {
+  color: #32265b;
+  font-size: 0.92rem;
+}
+
+.merchant-insights-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 8px;
+  color: #40385f;
+}
+
+.merchant-insights-list li {
+  line-height: 1.45;
+}
+
+.merchant-empty-state h4 {
+  margin: 0;
+  color: #2d2250;
+}
+
 @media (max-width: 1100px) {
   .app-shell {
     grid-template-columns: 220px 1fr;
+  }
+  .app-shell-merchant {
+    grid-template-columns: 1fr;
   }
   .stats-grid,
   .stats-grid-small {
@@ -1204,6 +1287,9 @@ input:focus {
   }
   .public-bundle-discovery-grid {
     grid-template-columns: repeat(2, minmax(170px, 1fr));
+  }
+  .merchant-kpi-definitions {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -1301,5 +1387,19 @@ input:focus {
   .public-bundle-discovery-card .marketing-btn {
     width: 100%;
     text-align: center;
+  }
+  .main-merchant .page-content {
+    padding: 12px;
+  }
+  .merchant-dashboard-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .merchant-dashboard-context {
+    justify-items: start;
+    text-align: left;
+  }
+  .merchant-kpi-grid {
+    grid-template-columns: 1fr;
   }
 }

@@ -62,6 +62,8 @@ export const api = {
   getCustomerInsights: (signal) => request("/customers/insights", { signal }),
   getMerchantDashboard: (shop) =>
     request(`/merchant/dashboard?shop=${encodeURIComponent(String(shop || "").trim())}`),
+  getMerchantDashboardActivity: (shop) =>
+    request(`/merchant/dashboard/activity?shop=${encodeURIComponent(String(shop || "").trim())}`),
   getPublicBundle: (input) => {
     const token =
       typeof input === "string" ? String(input || "").trim() : String(input?.token || "").trim();

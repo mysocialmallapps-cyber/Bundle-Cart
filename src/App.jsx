@@ -11,18 +11,17 @@ export default function App() {
   const shop = String(searchParams.get("shop") || "")
     .trim()
     .toLowerCase();
-  const isMerchantDashboard = location.pathname === "/dashboard";
+  const embedded = String(searchParams.get("embedded") || "").trim() === "1";
+  const host = String(searchParams.get("host") || "").trim();
+  const isEmbeddedMerchantContext = Boolean(shop && (embedded || host));
+  const isEmbeddedRootDashboard = location.pathname === "/" && isEmbeddedMerchantContext;
+  const isMerchantDashboard = location.pathname === "/dashboard" || isEmbeddedRootDashboard;
   const isPublicBundlePage =
     location.pathname === "/bundle" || location.pathname.startsWith("/bundle/");
-  const isMarketingPage = location.pathname === "/marketing" || location.pathname === "/";
-  const navItems = isMerchantDashboard
-    ? [
-        {
-          to: shop ? `/dashboard?shop=${encodeURIComponent(shop)}` : "/dashboard",
-          label: "Dashboard"
-        }
-      ]
-    : [{ to: "/admin/bundles", label: "Bundles" }];
+  const isMarketingPage =
+    location.pathname === "/marketing" || (location.pathname === "/" && !isEmbeddedRootDashboard);
+  const navItems = [{ to: "/admin/bundles", label: "Bundles" }];
+  const showAdminChrome = !isMerchantDashboard;
 
   if (isPublicBundlePage || isMarketingPage) {
     return (
@@ -40,36 +39,35 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <h1 className="brand">BundleCart</h1>
-        <p className="brand-subtitle">{isMerchantDashboard ? "Merchant View" : "Admin MVP"}</p>
-        <nav className="nav">
-          {navItems.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={({ isActive }) => `nav-item ${isActive ? "nav-item-active" : ""}`}
-            >
-              {item.label}
-            </NavLink>
-          ))}
-        </nav>
-      </aside>
+    <div className={`app-shell ${showAdminChrome ? "" : "app-shell-merchant"}`}>
+      {showAdminChrome ? (
+        <aside className="sidebar">
+          <h1 className="brand">BundleCart</h1>
+          <p className="brand-subtitle">Admin MVP</p>
+          <nav className="nav">
+            {navItems.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={({ isActive }) => `nav-item ${isActive ? "nav-item-active" : ""}`}
+              >
+                {item.label}
+              </NavLink>
+            ))}
+          </nav>
+        </aside>
+      ) : null}
 
-      <main className="main">
-        <header className="topbar">
-          <h2>{isMerchantDashboard ? "BundleCart Store Metrics" : "Bundle Network Operations"}</h2>
-          <p>
-            {isMerchantDashboard
-              ? "Track bundles, incremental orders, and BundleCart network performance."
-              : "Monitor active bundle windows, first-order fees, and linked free orders."}
-          </p>
-        </header>
-
+      <main className={`main ${isMerchantDashboard ? "main-merchant" : ""}`}>
+        {showAdminChrome ? (
+          <header className="topbar">
+            <h2>Bundle Network Operations</h2>
+            <p>Monitor active bundle windows, first-order fees, and linked free orders.</p>
+          </header>
+        ) : null}
         <section className="page-content">
           <Routes>
-            <Route path="/" element={<Navigate to="/admin/bundles" replace />} />
+            <Route path="/" element={<MerchantDashboardPage />} />
             <Route path="/dashboard" element={<MerchantDashboardPage />} />
             <Route path="/admin" element={<Navigate to="/admin/bundles" replace />} />
             <Route path="/admin/dashboard" element={<Navigate to="/admin/bundles" replace />} />

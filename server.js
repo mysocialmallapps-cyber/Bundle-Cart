@@ -611,6 +611,28 @@ CROSS JOIN orders_in_bundles_created oic
 CROSS JOIN fees_collected fc;
 `;
 
+const SELECT_MERCHANT_RECENT_ACTIVITY_SQL = `
+SELECT
+  COALESCE(lo.created_at, lo.inserted_at, lg.created_at) AS activity_at,
+  lg.id AS bundle_id,
+  lo.shopify_order_id AS order_id,
+  COALESCE(lo.shop_domain, lg.first_shop_domain, $1::text) AS shop_domain,
+  CASE
+    WHEN lg.active_until IS NOT NULL AND lg.active_until > NOW() THEN 'active'
+    ELSE 'expired'
+  END AS bundle_status,
+  CASE
+    WHEN lg.first_shop_domain = $1::text THEN 'Store bundle'
+    WHEN lg.first_shop_domain IS NULL THEN 'BundleCart network'
+    ELSE 'Network bundle'
+  END AS bundle_source
+FROM linked_orders lo
+JOIN link_groups lg ON lg.id = lo.group_id
+WHERE lo.shop_domain = $1::text
+ORDER BY COALESCE(lo.created_at, lo.inserted_at, lg.created_at) DESC
+LIMIT 25;
+`;
+
 const SELECT_BUNDLES_FOR_REMINDER_EMAIL_SQL = `
 SELECT id, email, active_until
 FROM link_groups
@@ -4029,6 +4051,57 @@ export function createApp() {
     }
   });
 
+  app.get("/api/merchant/dashboard/activity", async (req, res) => {
+    const shop = normalizeShopDomain(req.query.shop);
+    if (!shop) {
+      res.status(400).json({ ok: false, message: "Missing shop" });
+      return;
+    }
+
+    if (!dbPool) {
+      res.status(503).json({ ok: false, message: "Database unavailable" });
+      return;
+    }
+
+    try {
+      const merchantResult = await dbPool.query(SELECT_MERCHANT_ACCESS_TOKEN_SQL, [shop]);
+      const accessToken = String(merchantResult.rows[0]?.access_token || "").trim();
+      if (!accessToken) {
+        res.status(401).json({ ok: false, message: "Merchant auth required" });
+        return;
+      }
+
+      const billingAccess = await ensureMerchantBillingSubscription({
+        shopDomain: shop,
+        accessToken,
+        createIfMissing: true
+      });
+
+      if (!billingAccess?.active) {
+        res.status(402).json({
+          ok: false,
+          message: "Active subscription required",
+          approval_url: billingAccess?.confirmationUrl || null
+        });
+        return;
+      }
+
+      const result = await dbPool.query(SELECT_MERCHANT_RECENT_ACTIVITY_SQL, [shop]);
+      const activity = result.rows.map((row) => ({
+        date: row.activity_at ? new Date(row.activity_at).toISOString() : null,
+        bundle_id: Number(row.bundle_id || 0),
+        order_id: String(row.order_id || ""),
+        store: String(row.shop_domain || ""),
+        bundle_status: String(row.bundle_status || "expired"),
+        bundle_source: String(row.bundle_source || "BundleCart network")
+      }));
+      res.json({ activity });
+    } catch (error) {
+      console.error("MERCHANT DASHBOARD ACTIVITY FETCH ERROR", shop, error);
+      res.status(500).json({ ok: false, message: "Dashboard activity fetch failed" });
+    }
+  });
+
   app.get("/api/admin/bundles", async (req, res) => {
     console.log("BUNDLE DASHBOARD FETCH");
 
@@ -4278,7 +4351,24 @@ export function createApp() {
     res.sendFile(path.join(DIST_PATH, "index.html"));
   });
 
-  app.get("/", (_req, res) => {
+  app.get("/", async (req, res) => {
+    const shop = normalizeShopDomain(req.query.shop);
+    const embedded = String(req.query.embedded || "").trim() === "1";
+    const host = String(req.query.host || "").trim();
+    const isEmbeddedMerchantLaunch = Boolean(shop && (embedded || host));
+
+    if (isEmbeddedMerchantLaunch) {
+      console.log("BUNDLECART EMBEDDED ROOT ROUTE", {
+        shop,
+        embedded,
+        hasHost: Boolean(host)
+      });
+      const accessCheck = await enforceBundlecartBillingAccess(req, res, { allowMissingShop: false });
+      if (!accessCheck.allowed) {
+        return;
+      }
+    }
+
     res.sendFile(path.join(DIST_PATH, "index.html"));
   });
 
