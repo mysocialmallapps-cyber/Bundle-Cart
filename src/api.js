@@ -62,12 +62,36 @@ export const api = {
   getCustomerInsights: (signal) => request("/customers/insights", { signal }),
   getMerchantDashboard: (shop) =>
     request(`/merchant/dashboard?shop=${encodeURIComponent(String(shop || "").trim())}`),
-  getMerchantAppAccess: (shop) =>
-    request(`/merchant/app-access?shop=${encodeURIComponent(String(shop || "").trim())}`),
+  getMerchantAppAccess: (input) => {
+    const shop = typeof input === "string" ? input : input?.shop;
+    const host = typeof input === "object" ? String(input?.host || "").trim() : "";
+    const embedded = typeof input === "object" ? Boolean(input?.embedded) : false;
+    const params = new URLSearchParams();
+    params.set("shop", String(shop || "").trim());
+    if (host) {
+      params.set("host", host);
+    }
+    if (embedded) {
+      params.set("embedded", "1");
+    }
+    return request(`/merchant/app-access?${params.toString()}`);
+  },
   getMerchantDashboardActivity: (shop) =>
     request(`/merchant/dashboard/activity?shop=${encodeURIComponent(String(shop || "").trim())}`),
-  getMerchantBillingActivateUrl: (shop) =>
-    request(`/merchant/billing/activate-url?shop=${encodeURIComponent(String(shop || "").trim())}`),
+  getMerchantBillingActivateUrl: (input) => {
+    const shop = typeof input === "string" ? input : input?.shop;
+    const host = typeof input === "object" ? String(input?.host || "").trim() : "";
+    const embedded = typeof input === "object" ? Boolean(input?.embedded) : false;
+    const params = new URLSearchParams();
+    params.set("shop", String(shop || "").trim());
+    if (host) {
+      params.set("host", host);
+    }
+    if (embedded) {
+      params.set("embedded", "1");
+    }
+    return request(`/merchant/billing/activate-url?${params.toString()}`);
+  },
   getPublicBundle: (input) => {
     const token =
       typeof input === "string" ? String(input || "").trim() : String(input?.token || "").trim();

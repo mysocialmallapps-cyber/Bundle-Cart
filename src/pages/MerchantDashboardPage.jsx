@@ -74,8 +74,9 @@ export default function MerchantDashboardPage() {
   const shop = String(searchParams.get("shop") || "")
     .trim()
     .toLowerCase();
+  const host = String(searchParams.get("host") || "").trim();
   const isEmbedded = String(searchParams.get("embedded") || "").trim() === "1";
-  const hasHostParam = Boolean(String(searchParams.get("host") || "").trim());
+  const hasHostParam = Boolean(host);
   const [loading, setLoading] = useState(false);
   const [accessLoading, setAccessLoading] = useState(true);
   const [error, setError] = useState("");
@@ -125,7 +126,11 @@ export default function MerchantDashboardPage() {
     }
 
     api
-      .getMerchantAppAccess(shop)
+      .getMerchantAppAccess({
+        shop,
+        host,
+        embedded: isEmbedded || hasHostParam
+      })
       .then((payload) => {
         if (!mounted) {
           return;
@@ -152,7 +157,7 @@ export default function MerchantDashboardPage() {
     return () => {
       mounted = false;
     };
-  }, [shop]);
+  }, [shop, host, isEmbedded, hasHostParam]);
 
   useEffect(() => {
     if (accessState.route !== "dashboard" || !shop) {
@@ -266,7 +271,14 @@ export default function MerchantDashboardPage() {
   }
 
   if (accessState.route === "billing_required") {
-    return <BillingRequiredPage shop={shop} approvalUrl={accessState.approval_url} />;
+    return (
+      <BillingRequiredPage
+        shop={shop}
+        host={host}
+        embedded={isEmbedded || hasHostParam}
+        approvalUrl={accessState.approval_url}
+      />
+    );
   }
 
   if (accessState.route === "auth_required") {

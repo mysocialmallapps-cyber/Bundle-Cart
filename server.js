@@ -1378,14 +1378,41 @@ async function upsertMerchantBillingSubscriptionState({
   ]);
 }
 
-function buildBundlecartSubscriptionReturnUrl(shopDomain) {
+function buildBundlecartSubscriptionReturnUrl(shopDomain, options = {}) {
   const normalizedShop = normalizeShopDomain(shopDomain);
+  const normalizedHost = String(options.host || "").trim();
+  const embedded = String(options.embedded || "").trim() === "1" || Boolean(normalizedHost);
   const appUrl = String(process.env.APP_URL || "https://bundle-cart.replit.app").replace(/\/+$/, "");
   const callbackUrl = new URL(`${appUrl}/billing/callback`);
   if (normalizedShop) {
     callbackUrl.searchParams.set("shop", normalizedShop);
   }
+  if (embedded) {
+    callbackUrl.searchParams.set("embedded", "1");
+  }
+  if (normalizedHost) {
+    callbackUrl.searchParams.set("host", normalizedHost);
+  }
   return callbackUrl.toString();
+}
+
+function buildEmbeddedAwareAppPath(basePath, options = {}) {
+  const normalizedBasePath = String(basePath || "").trim() || "/";
+  const normalizedShop = normalizeShopDomain(options.shop || "");
+  const normalizedHost = String(options.host || "").trim();
+  const embedded = String(options.embedded || "").trim() === "1" || Boolean(normalizedHost);
+  const params = new URLSearchParams();
+  if (normalizedShop) {
+    params.set("shop", normalizedShop);
+  }
+  if (embedded) {
+    params.set("embedded", "1");
+  }
+  if (normalizedHost) {
+    params.set("host", normalizedHost);
+  }
+  const query = params.toString();
+  return query ? `${normalizedBasePath}?${query}` : normalizedBasePath;
 }
 
 function safeJsonString(value) {
@@ -1789,7 +1816,7 @@ async function fetchShopifyUsageBillingContext({ shopDomain, accessToken }) {
   return null;
 }
 
-async function createBundlecartAppSubscription({ shopDomain, accessToken }) {
+async function createBundlecartAppSubscription({ shopDomain, accessToken, returnContext = {} }) {
   const normalizedShop = normalizeShopDomain(shopDomain);
   if (!normalizedShop) {
     throw new Error("missing_shop_for_subscription_create");
@@ -1802,7 +1829,7 @@ async function createBundlecartAppSubscription({ shopDomain, accessToken }) {
 
   const usageCapAmount = getBillingNumericValue(SHOPIFY_BILLING_USAGE_CAP_AMOUNT, 1000);
   const recurringBaseAmount = getBillingNumericValue(SHOPIFY_BILLING_BASE_PLAN_AMOUNT, 0);
-  const returnUrl = buildBundlecartSubscriptionReturnUrl(normalizedShop);
+  const returnUrl = buildBundlecartSubscriptionReturnUrl(normalizedShop, returnContext);
   const lineItems = [
     {
       plan: {
@@ -1968,7 +1995,8 @@ async function createBundlecartAppSubscription({ shopDomain, accessToken }) {
 async function ensureMerchantBillingSubscription({
   shopDomain,
   accessToken,
-  createIfMissing = true
+  createIfMissing = true,
+  returnContext = {}
 }) {
   const normalizedShop = normalizeShopDomain(shopDomain);
   const token = String(accessToken || "").trim();
@@ -2077,7 +2105,8 @@ async function ensureMerchantBillingSubscription({
   try {
     const createdSubscription = await createBundlecartAppSubscription({
       shopDomain: normalizedShop,
-      accessToken: token
+      accessToken: token,
+      returnContext
     });
     await upsertMerchantBillingSubscriptionState({
       shopDomain: normalizedShop,
@@ -2721,9 +2750,12 @@ async function findMerchantAuthByShop(shopDomain) {
 async function resolveMerchantAppRoute({
   shopDomain,
   createIfMissing = true,
-  requestPath = ""
+  requestPath = "",
+  returnContext = {}
 } = {}) {
   const shop = normalizeShopDomain(shopDomain);
+  const normalizedHost = String(returnContext?.host || "").trim();
+  const embedded = String(returnContext?.embedded || "").trim() === "1" || Boolean(normalizedHost);
   console.log("BUNDLECART APP ACCESS CHECK", {
     shop: shop || "",
     path: requestPath,
@@ -2737,7 +2769,11 @@ async function resolveMerchantAppRoute({
       tokenPresent: false,
       billingActive: false,
       route: "auth_required",
-      authUrl: ""
+      authUrl: buildEmbeddedAwareAppPath("/auth", {
+        shop,
+        host: normalizedHost,
+        embedded: embedded ? "1" : ""
+      })
     };
   }
 
@@ -2771,7 +2807,11 @@ async function resolveMerchantAppRoute({
       tokenPresent: merchantAuth.tokenPresent,
       billingActive: false,
       route: "auth_required",
-      authUrl: `/auth?shop=${encodeURIComponent(shop)}`
+      authUrl: buildEmbeddedAwareAppPath("/auth", {
+        shop,
+        host: normalizedHost,
+        embedded: embedded ? "1" : ""
+      })
     };
   }
 
@@ -2786,7 +2826,11 @@ async function resolveMerchantAppRoute({
       tokenPresent: false,
       billingActive: false,
       route: "auth_required",
-      authUrl: `/auth?shop=${encodeURIComponent(shop)}`
+      authUrl: buildEmbeddedAwareAppPath("/auth", {
+        shop,
+        host: normalizedHost,
+        embedded: embedded ? "1" : ""
+      })
     };
   }
 
@@ -2813,7 +2857,8 @@ async function resolveMerchantAppRoute({
   const subscriptionResult = await ensureMerchantBillingSubscription({
     shopDomain: shop,
     accessToken,
-    createIfMissing
+    createIfMissing,
+    returnContext
   });
 
   if (subscriptionResult?.active) {
@@ -2829,7 +2874,12 @@ async function resolveMerchantAppRoute({
   }
 
   const approvalUrl =
-    subscriptionResult?.confirmationUrl || `/billing/subscribe?shop=${encodeURIComponent(shop)}`;
+    subscriptionResult?.confirmationUrl ||
+    buildEmbeddedAwareAppPath("/billing/subscribe", {
+      shop,
+      host: normalizedHost,
+      embedded: embedded ? "1" : ""
+    });
   console.log("BUNDLECART BILLING STATUS", { shop, billing: "missing" });
   console.log("BUNDLECART ROUTE CHOSEN billing_required", { shop, path: requestPath });
   return {
@@ -4080,7 +4130,11 @@ export function createApp() {
       subscriptionCheckResult = await ensureMerchantBillingSubscription({
         shopDomain: shop,
         accessToken,
-        createIfMissing: true
+        createIfMissing: true,
+        returnContext: {
+          host: String(req.query.host || "").trim(),
+          embedded: String(req.query.embedded || "").trim()
+        }
       });
     } catch (error) {
       console.error("MERCHANT TOKEN SAVE ERROR", error);
@@ -4092,7 +4146,13 @@ export function createApp() {
       return;
     }
 
-    res.redirect(`/dashboard?shop=${encodeURIComponent(shop)}`);
+    res.redirect(
+      buildEmbeddedAwareAppPath("/dashboard", {
+        shop,
+        host: String(req.query.host || "").trim(),
+        embedded: String(req.query.embedded || "").trim()
+      })
+    );
   });
 
   app.get("/billing/subscribe", async (req, res) => {
@@ -4117,7 +4177,11 @@ export function createApp() {
       const subscriptionResult = await ensureMerchantBillingSubscription({
         shopDomain: shop,
         accessToken,
-        createIfMissing: true
+        createIfMissing: true,
+        returnContext: {
+          host: String(req.query.host || "").trim(),
+          embedded: String(req.query.embedded || "").trim()
+        }
       });
 
       if (subscriptionResult?.approvalRequired && subscriptionResult?.confirmationUrl) {
@@ -4128,7 +4192,13 @@ export function createApp() {
 
       if (subscriptionResult?.active) {
         console.log("BUNDLECART BILLING ACTIVE", shop);
-        res.redirect(`/dashboard?shop=${encodeURIComponent(shop)}`);
+        res.redirect(
+          buildEmbeddedAwareAppPath("/dashboard", {
+            shop,
+            host: String(req.query.host || "").trim(),
+            embedded: String(req.query.embedded || "").trim()
+          })
+        );
         return;
       }
 
@@ -4160,7 +4230,11 @@ export function createApp() {
       const subscriptionResult = await ensureMerchantBillingSubscription({
         shopDomain: shop,
         accessToken,
-        createIfMissing: false
+        createIfMissing: false,
+        returnContext: {
+          host: String(req.query.host || "").trim(),
+          embedded: String(req.query.embedded || "").trim()
+        }
       });
 
       if (subscriptionResult?.approvalRequired && subscriptionResult?.confirmationUrl) {
@@ -4175,7 +4249,17 @@ export function createApp() {
       console.error("BUNDLECART SUBSCRIPTION CREATE FAILED", shop, error);
     }
 
-    res.redirect(`/dashboard?shop=${encodeURIComponent(shop)}`);
+    const dashboardParams = new URLSearchParams();
+    dashboardParams.set("shop", shop);
+    const host = String(req.query.host || "").trim();
+    const embedded = String(req.query.embedded || "").trim() === "1" || Boolean(host);
+    if (embedded) {
+      dashboardParams.set("embedded", "1");
+    }
+    if (host) {
+      dashboardParams.set("host", host);
+    }
+    res.redirect(`/dashboard?${dashboardParams.toString()}`);
   });
 
   app.post("/internal/billing/retry", express.json(), async (req, res) => {
@@ -4214,7 +4298,11 @@ export function createApp() {
       await resolveMerchantAppRoute({
         shopDomain: shop,
         createIfMissing: true,
-        requestPath: req.path
+        requestPath: req.path,
+        returnContext: {
+          host,
+          embedded: embedded ? "1" : ""
+        }
       });
       res.sendFile(path.join(DIST_PATH, "index.html"));
       return;
@@ -4381,6 +4469,8 @@ export function createApp() {
 
   app.get("/api/merchant/app-access", async (req, res) => {
     const shop = normalizeShopDomain(req.query.shop);
+    const host = String(req.query.host || "").trim();
+    const embedded = String(req.query.embedded || "").trim() === "1" || Boolean(host);
     if (!shop) {
       res.status(400).json({ ok: false, message: "Missing shop" });
       return;
@@ -4390,7 +4480,11 @@ export function createApp() {
       const routeState = await resolveMerchantAppRoute({
         shopDomain: shop,
         createIfMissing: true,
-        requestPath: req.path
+        requestPath: req.path,
+        returnContext: {
+          host,
+          embedded: embedded ? "1" : ""
+        }
       });
       res.json({
         shop,
@@ -4409,6 +4503,8 @@ export function createApp() {
 
   app.get("/api/merchant/billing/activate-url", async (req, res) => {
     const shop = normalizeShopDomain(req.query.shop);
+    const host = String(req.query.host || "").trim();
+    const embedded = String(req.query.embedded || "").trim() === "1" || Boolean(host);
     if (!shop) {
       res.status(400).json({ ok: false, message: "Missing shop" });
       return;
@@ -4418,7 +4514,11 @@ export function createApp() {
       const routeState = await resolveMerchantAppRoute({
         shopDomain: shop,
         createIfMissing: true,
-        requestPath: req.path
+        requestPath: req.path,
+        returnContext: {
+          host,
+          embedded: embedded ? "1" : ""
+        }
       });
       if (routeState.route === "auth_required") {
         res.status(401).json({
@@ -4438,15 +4538,26 @@ export function createApp() {
       }
 
       const approvalUrl =
-        routeState.approvalUrl || `/billing/subscribe?shop=${encodeURIComponent(shop)}`;
+        routeState.approvalUrl ||
+        buildEmbeddedAwareAppPath("/billing/subscribe", {
+          shop,
+          host,
+          embedded: embedded ? "1" : ""
+        });
+      const returnUrl = buildBundlecartSubscriptionReturnUrl(shop, {
+        host,
+        embedded: embedded ? "1" : ""
+      });
       console.log("BUNDLECART ROUTE CHOSEN billing_redirect_triggered", {
         shop,
-        path: req.path
+        path: req.path,
+        returnUrl
       });
       res.status(200).json({
         ok: true,
         billing_active: false,
-        approval_url: approvalUrl
+        approval_url: approvalUrl,
+        return_url: returnUrl
       });
     } catch (error) {
       console.error("MERCHANT BILLING ACTIVATE URL ERROR", shop, error);
@@ -4726,9 +4837,11 @@ export function createApp() {
   app.get("/app-config.js", (_req, res) => {
     const appUrl = process.env.APP_URL || "";
     const redirectUrl = process.env.REDIRECT_URL || `${appUrl}/auth/callback`;
+    const shopifyApiKey = process.env.SHOPIFY_API_KEY || "";
     const config = JSON.stringify({
       APP_URL: appUrl,
-      REDIRECT_URL: redirectUrl
+      REDIRECT_URL: redirectUrl,
+      SHOPIFY_API_KEY: shopifyApiKey
     });
 
     res
@@ -4769,7 +4882,11 @@ export function createApp() {
       await resolveMerchantAppRoute({
         shopDomain: shop,
         createIfMissing: true,
-        requestPath: req.path
+        requestPath: req.path,
+        returnContext: {
+          host,
+          embedded: embedded ? "1" : ""
+        }
       });
     }
 
