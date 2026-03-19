@@ -3213,6 +3213,44 @@ async function registerCarrierServiceForActiveMerchants() {
   }
 }
 
+async function registerOrdersCreateWebhooksForActiveMerchants() {
+  if (!dbPool) {
+    return;
+  }
+
+  try {
+    const columnsResult = await dbPool.query(SELECT_MERCHANT_COLUMNS_SQL);
+    const columns = new Set(columnsResult.rows.map((row) => row.column_name));
+
+    const domainColumn = columns.has("domain")
+      ? "domain"
+      : columns.has("shop_domain")
+        ? "shop_domain"
+        : "";
+    const accessTokenColumn = columns.has("access_token")
+      ? "access_token"
+      : columns.has("shopify_access_token")
+        ? "shopify_access_token"
+        : columns.has("token")
+          ? "token"
+          : "";
+
+    if (!domainColumn || !accessTokenColumn) {
+      return;
+    }
+
+    const activeFilter = columns.has("is_active") ? " AND is_active = TRUE" : "";
+    const merchantsQuery = `SELECT ${domainColumn} AS shop_domain, ${accessTokenColumn} AS access_token FROM merchants WHERE ${accessTokenColumn} IS NOT NULL AND ${accessTokenColumn} <> ''${activeFilter} LIMIT 300`;
+    const merchantsResult = await dbPool.query(merchantsQuery);
+
+    for (const merchant of merchantsResult.rows) {
+      await registerOrdersCreateWebhookForShop(merchant.shop_domain, merchant.access_token);
+    }
+  } catch (error) {
+    console.error("SHOPIFY WEBHOOK REGISTER ERROR orders/create active_merchants", error);
+  }
+}
+
 async function exchangeShopifyAccessToken({ shop, code }) {
   const apiKey = process.env.SHOPIFY_API_KEY || "";
   const apiSecret = process.env.SHOPIFY_API_SECRET || "";
@@ -3505,6 +3543,13 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
     typeof shopDomain === "string" ? shopDomain.trim() : "";
   const orderId = String(order.id);
   const orderName = String(order.name || "").trim();
+  console.log("BUNDLECART WEBHOOK PERSIST START", {
+    timestamp: new Date().toISOString(),
+    shopDomain: normalizedShopDomain || "",
+    orderId,
+    orderName,
+    webhookId: String(webhookId || "").trim()
+  });
   const email =
     typeof order.email === "string" && order.email.trim()
       ? order.email.trim().toLowerCase()
@@ -3585,6 +3630,11 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
       const activeGroupResult = await dbPool.query(SELECT_ACTIVE_BUNDLE_GROUP_BY_ADDRESS_SQL, [
         addressHash
       ]);
+      console.log("BUNDLECART ACTIVE BUNDLE LOOKUP", buildBundlecartLogContext({
+        activeBundleFound: activeGroupResult.rowCount > 0,
+        orderId,
+        orderName
+      }));
       if (activeGroupResult.rowCount > 0) {
         existingWindowFound = true;
         groupId = activeGroupResult.rows[0].id;
@@ -3646,6 +3696,16 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
           existingWindowFound = true;
           groupId = activeGroupRecheckResult.rows[0].id;
           groupBundleToken = await ensureBundlePublicTokenForGroup(groupId);
+          console.log(
+            "BUNDLECART ACTIVE BUNDLE LOOKUP RECHECK",
+            buildBundlecartLogContext({
+              activeBundleFound: true,
+              bundleId: groupId,
+              orderId,
+              orderName,
+              bundleToken: groupBundleToken
+            })
+          );
           const existingFirstShopDomain = normalizeShopDomain(
             activeGroupRecheckResult.rows[0].first_shop_domain
           );
@@ -3688,6 +3748,14 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
           ]);
           console.log("BUNDLECART CUSTOMER ADDRESS STORED");
         } else {
+          console.log(
+            "BUNDLECART ACTIVE BUNDLE LOOKUP RECHECK",
+            buildBundlecartLogContext({
+              activeBundleFound: false,
+              orderId,
+              orderName
+            })
+          );
           const latestGroupResult = await dbPool.query(SELECT_LATEST_BUNDLE_GROUP_BY_ADDRESS_SQL, [
             addressHash
           ]);
@@ -3747,6 +3815,16 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
       }
 
       if (groupId != null) {
+        console.log(
+          "BUNDLECART GROUP CHOSEN",
+          buildBundlecartLogContext({
+            bundleId: groupId,
+            orderId,
+            orderName,
+            bundleToken: groupBundleToken || "",
+            existingWindowFound
+          })
+        );
         console.log("DB STEP linked_orders insert");
         const linkedOrderInsertResult = await dbPool.query(INSERT_LINKED_ORDER_SQL, [
           groupId,
@@ -3932,7 +4010,8 @@ export function createApp() {
     if (!Array.isArray(rows) || rows.length === 0) {
       return {
         ...emptyPublicBundleResponse,
-        current_server_time: new Date().toISOString()
+        current_server_time: new Date().toISOString(),
+        order_count: 0
       };
     }
     const firstRow = rows[0];
@@ -3954,7 +4033,8 @@ export function createApp() {
         firstRow.current_server_time != null
           ? new Date(firstRow.current_server_time).toISOString()
           : new Date().toISOString(),
-      orders
+      orders,
+      order_count: orders.length
     };
   }
 
@@ -4078,6 +4158,13 @@ export function createApp() {
       console.log(
         `WEBHOOK orders/create received id=${order?.id ?? ""} email=${order?.email ?? ""} created_at=${order?.created_at ?? ""} total_price=${order?.total_price ?? ""} shop=${shopDomain}`
       );
+      console.log("BUNDLECART WEBHOOK RECEIVED", {
+        timestamp: new Date().toISOString(),
+        shopDomain: normalizeShopDomain(shopDomain),
+        orderId: String(order?.id ?? ""),
+        orderName: String(order?.name ?? ""),
+        webhookId
+      });
 
       res.status(200).json({ ok: true });
 
@@ -4653,6 +4740,11 @@ export function createApp() {
         finalState: payload.bundle_state,
         orderCount: Array.isArray(payload.orders) ? payload.orders.length : 0
       });
+      console.log("BUNDLE PUBLIC LOOKUP ORDER COUNT", {
+        token,
+        bundleId: payload.bundle_id,
+        orderCount: Number(payload.order_count || 0)
+      });
       res.status(200).json(payload);
     } catch (error) {
       console.error("BUNDLE PUBLIC API ERROR", {
@@ -5178,6 +5270,7 @@ if (isDirectRun && process.env.NODE_ENV !== "test") {
       app.listen(PORT, "0.0.0.0", () => {
         console.log(`BundleCart server listening on port ${PORT}`);
         void registerCarrierServiceForActiveMerchants();
+        void registerOrdersCreateWebhooksForActiveMerchants();
         startBundleLifecycleEmailWorker();
       });
     });
