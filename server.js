@@ -33,6 +33,18 @@ const BUNDLECART_FREE_RATE = {
   description:
     "⏳ You have 72 hours to add more items. All additional orders ship for FREE."
 };
+const STANDARD_RATE = {
+  service_name: "Standard",
+  service_code: "STANDARD",
+  total_price: "995",
+  description: "Standard shipping (3-5 business days)"
+};
+const EXPRESS_RATE = {
+  service_name: "Express",
+  service_code: "EXPRESS",
+  total_price: "1995",
+  description: "Express shipping (1-2 business days)"
+};
 const BUNDLECART_EMAIL_WORKER_INTERVAL_MS = 10 * 60 * 1000;
 const BUNDLECART_EMAIL_WORKER_BATCH_LIMIT = 100;
 const SHOPIFY_BILLING_MODE = String(process.env.SHOPIFY_BILLING_MODE || "manual")
@@ -1361,16 +1373,42 @@ function safeJsonString(value) {
   }
 }
 
-function buildBundleCartRateResponse({ eligibleFree, currency }) {
+function buildBundleCartRateResponse({ eligibleFree, currency, includeBundleCart = true }) {
   const normalizedCurrency = String(currency || "USD").trim().toUpperCase() || "USD";
-  const rate = eligibleFree ? BUNDLECART_FREE_RATE : BUNDLECART_PAID_RATE;
-  return {
-    rates: [
+  const bundleCartRate = eligibleFree ? BUNDLECART_FREE_RATE : BUNDLECART_PAID_RATE;
+  const rates = [];
+  if (includeBundleCart) {
+    rates.push({
+      ...bundleCartRate,
+      currency: normalizedCurrency
+    });
+  }
+  rates.push(
+    {
+      ...STANDARD_RATE,
+      currency: normalizedCurrency
+    },
+    {
+      ...EXPRESS_RATE,
+      currency: normalizedCurrency
+    }
+  );
+
+  if (rates.length === 0) {
+    rates.push(
       {
-        ...rate,
+        ...STANDARD_RATE,
+        currency: normalizedCurrency
+      },
+      {
+        ...EXPRESS_RATE,
         currency: normalizedCurrency
       }
-    ]
+    );
+  }
+
+  return {
+    rates
   };
 }
 
@@ -3319,10 +3357,61 @@ export function createApp() {
   });
 
   app.post("/api/shipping/rates", express.text({ type: "*/*" }), (req, res) => {
-    const fallbackPaid = () => {
-      console.log("BUNDLECART RATE RETURNED 5 USD");
+    const rateRequestTimeoutMs = 2500;
+    const withTimeout = (promise, timeoutMs, timeoutLabel) =>
+      Promise.race([
+        promise,
+        new Promise((_, reject) => {
+          setTimeout(() => reject(new Error(timeoutLabel)), timeoutMs);
+        })
+      ]);
+
+    const parseRatePayload = () => {
+      if (typeof req.body === "string" && req.body.trim()) {
+        try {
+          return JSON.parse(req.body);
+        } catch {
+          return {};
+        }
+      }
+      if (Buffer.isBuffer(req.body) && req.body.length > 0) {
+        try {
+          return JSON.parse(req.body.toString("utf8"));
+        } catch {
+          return {};
+        }
+      }
+      if (req.body && typeof req.body === "object") {
+        return req.body;
+      }
+      return {};
+    };
+
+    const deriveCurrency = (parsedPayload) => {
+      const rate =
+        parsedPayload?.rate && typeof parsedPayload.rate === "object" ? parsedPayload.rate : {};
+      const destination =
+        rate.destination && typeof rate.destination === "object" ? rate.destination : {};
+      return String(destination.currency || rate.currency || "USD")
+        .trim()
+        .toUpperCase();
+    };
+
+    const fallbackStandardExpressOnly = (error, parsedPayloadForCurrency = {}) => {
+      const fallbackCurrency = deriveCurrency(parsedPayloadForCurrency);
+      console.error("BundleCart fallback triggered", {
+        message: error?.message || String(error),
+        stack: error?.stack || null
+      });
+      if (res.headersSent) {
+        return;
+      }
       return res.status(200).json(
-        buildBundleCartRateResponse({ eligibleFree: false, currency: "USD" })
+        buildBundleCartRateResponse({
+          eligibleFree: false,
+          currency: fallbackCurrency,
+          includeBundleCart: false
+        })
       );
     };
 
@@ -3331,22 +3420,7 @@ export function createApp() {
       try {
         const shopDomainHeader =
           req.get("x-shopify-shop-domain") || req.get("X-Shopify-Shop-Domain") || "";
-
-        if (typeof req.body === "string" && req.body.trim()) {
-          try {
-            parsedPayload = JSON.parse(req.body);
-          } catch {
-            parsedPayload = {};
-          }
-        } else if (Buffer.isBuffer(req.body) && req.body.length > 0) {
-          try {
-            parsedPayload = JSON.parse(req.body.toString("utf8"));
-          } catch {
-            parsedPayload = {};
-          }
-        } else if (req.body && typeof req.body === "object") {
-          parsedPayload = req.body;
-        }
+        parsedPayload = parseRatePayload();
 
         const keys =
           parsedPayload && typeof parsedPayload === "object" && !Array.isArray(parsedPayload)
@@ -3371,17 +3445,28 @@ export function createApp() {
         console.log("BUNDLECART RATE ELIGIBILITY QUERY PARAMS", { addressHash });
         console.log("BUNDLECART ADDRESS-ONLY ELIGIBILITY", { addressHash });
 
-        if (!addressHash || !dbPool) {
+        if (!addressHash) {
           console.log("BUNDLECART NETWORK FIRST ORDER FEE 5");
           console.log("BUNDLECART RATE RETURNED 5 USD");
+          console.log("BundleCart success", {
+            eligibleFree: false,
+            reason: "missing_or_invalid_address_hash",
+            returnedRates: ["BUNDLECART_PAID", "STANDARD", "EXPRESS"]
+          });
           return res
             .status(200)
             .json(buildBundleCartRateResponse({ eligibleFree: false, currency }));
         }
 
-        const activeGroupResult = await dbPool.query(SELECT_ACTIVE_BUNDLE_GROUP_BY_ADDRESS_SQL, [
-          addressHash
-        ]);
+        if (!dbPool) {
+          throw new Error("bundlecart_rate_db_unavailable");
+        }
+
+        const activeGroupResult = await withTimeout(
+          dbPool.query(SELECT_ACTIVE_BUNDLE_GROUP_BY_ADDRESS_SQL, [addressHash]),
+          rateRequestTimeoutMs,
+          "bundlecart_rate_active_group_lookup_timeout"
+        );
         if (activeGroupResult.rowCount > 0) {
           const activeGroupId = activeGroupResult.rows[0].id;
           console.log("BUNDLECART EXISTING HASH", activeGroupResult.rows[0].address_hash || "");
@@ -3391,20 +3476,31 @@ export function createApp() {
           );
           console.log("BUNDLECART EXISTING BUNDLE WINDOW FOUND", activeGroupId);
           console.log("BUNDLECART NETWORK LINKED ORDER FREE");
+          console.log("BundleCart success", {
+            eligibleFree: true,
+            groupId: activeGroupId,
+            returnedRates: ["BUNDLECART_FREE", "STANDARD", "EXPRESS"]
+          });
           return res
             .status(200)
             .json(buildBundleCartRateResponse({ eligibleFree: true, currency }));
         }
 
-        const recentHashesResult = await dbPool.query(SELECT_RECENT_ACTIVE_BUNDLE_HASHES_SQL, [5]);
+        const recentHashesResult = await withTimeout(
+          dbPool.query(SELECT_RECENT_ACTIVE_BUNDLE_HASHES_SQL, [5]),
+          rateRequestTimeoutMs,
+          "bundlecart_rate_recent_hashes_lookup_timeout"
+        );
         for (const row of recentHashesResult.rows) {
           console.log("BUNDLECART EXISTING HASH", row.address_hash || "");
         }
         console.log("BUNDLECART MATCH RESULT", false);
 
-        const latestGroupResult = await dbPool.query(SELECT_LATEST_BUNDLE_GROUP_BY_ADDRESS_SQL, [
-          addressHash
-        ]);
+        const latestGroupResult = await withTimeout(
+          dbPool.query(SELECT_LATEST_BUNDLE_GROUP_BY_ADDRESS_SQL, [addressHash]),
+          rateRequestTimeoutMs,
+          "bundlecart_rate_latest_group_lookup_timeout"
+        );
         if (latestGroupResult.rowCount > 0) {
           const latestActiveUntil = latestGroupResult.rows[0].active_until;
           if (latestActiveUntil && new Date(latestActiveUntil).getTime() <= Date.now()) {
@@ -3414,12 +3510,16 @@ export function createApp() {
 
         console.log("BUNDLECART NETWORK FIRST ORDER FEE 5");
         console.log("BUNDLECART RATE RETURNED 5 USD");
+        console.log("BundleCart success", {
+          eligibleFree: false,
+          reason: "no_active_window_found",
+          returnedRates: ["BUNDLECART_PAID", "STANDARD", "EXPRESS"]
+        });
         return res
           .status(200)
           .json(buildBundleCartRateResponse({ eligibleFree: false, currency }));
       } catch (error) {
-        console.error("BUNDLECART RATE REQUEST ERROR", error);
-        return fallbackPaid();
+        return fallbackStandardExpressOnly(error, parsedPayload);
       }
     })();
   });
