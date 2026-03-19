@@ -122,6 +122,7 @@ CREATE TABLE IF NOT EXISTS link_groups (
   bundle_public_token TEXT UNIQUE,
   customer_address_json JSONB,
   reminder_email_sent BOOLEAN DEFAULT FALSE,
+  reminder_email_count INTEGER DEFAULT 0,
   expired_email_sent BOOLEAN DEFAULT FALSE
 );
 `;
@@ -500,6 +501,9 @@ SELECT
   lg.email AS customer_email,
   lg.active_until,
   lg.bundle_public_token,
+  COALESCE(lg.reminder_email_count, 0) AS reminder_email_count,
+  COALESCE(lg.reminder_email_sent, FALSE) AS reminder_email_sent,
+  COALESCE(lg.expired_email_sent, FALSE) AS expired_email_sent,
   COUNT(lo.id)::integer AS order_count
 FROM link_groups lg
 LEFT JOIN linked_orders lo
@@ -634,12 +638,16 @@ LIMIT 25;
 `;
 
 const SELECT_BUNDLES_FOR_REMINDER_EMAIL_SQL = `
-SELECT id, email, active_until
+SELECT id, email, active_until, COALESCE(reminder_email_count, 0) AS reminder_email_count
 FROM link_groups
 WHERE active_until IS NOT NULL
   AND active_until > NOW()
-  AND active_until <= NOW() + INTERVAL '24 hours'
-  AND COALESCE(reminder_email_sent, FALSE) = FALSE
+  AND COALESCE(expired_email_sent, FALSE) = FALSE
+  AND (
+    (COALESCE(reminder_email_count, 0) = 0 AND active_until <= NOW() + INTERVAL '24 hours')
+    OR
+    (COALESCE(reminder_email_count, 0) = 1 AND active_until <= NOW() + INTERVAL '6 hours')
+  )
 ORDER BY active_until ASC
 LIMIT $1::integer;
 `;
@@ -656,7 +664,8 @@ LIMIT $1::integer;
 
 const UPDATE_LINK_GROUP_REMINDER_EMAIL_SENT_SQL = `
 UPDATE link_groups
-SET reminder_email_sent = TRUE
+SET reminder_email_count = LEAST(COALESCE(reminder_email_count, 0) + 1, 2),
+    reminder_email_sent = (LEAST(COALESCE(reminder_email_count, 0) + 1, 2) >= 2)
 WHERE id = $1::integer;
 `;
 
@@ -778,6 +787,19 @@ ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS customer_address_json JSONB;
 
 const ALTER_LINK_GROUPS_ADD_REMINDER_EMAIL_SENT_SQL = `
 ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS reminder_email_sent BOOLEAN DEFAULT FALSE;
+`;
+
+const ALTER_LINK_GROUPS_ADD_REMINDER_EMAIL_COUNT_SQL = `
+ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS reminder_email_count INTEGER DEFAULT 0;
+`;
+
+const BACKFILL_LINK_GROUPS_REMINDER_EMAIL_COUNT_SQL = `
+UPDATE link_groups
+SET reminder_email_count = CASE
+  WHEN COALESCE(reminder_email_sent, FALSE) = TRUE AND COALESCE(reminder_email_count, 0) < 2 THEN 2
+  ELSE COALESCE(reminder_email_count, 0)
+END
+WHERE reminder_email_sent IS NOT NULL OR reminder_email_count IS NOT NULL;
 `;
 
 const ALTER_LINK_GROUPS_ADD_EXPIRED_EMAIL_SENT_SQL = `
@@ -1299,6 +1321,44 @@ function buildPublicBundleUrl({ bundleId, customerEmail }) {
   return `${appUrl}/bundle?${params.toString()}`;
 }
 
+function deriveBundleEmailState(summary) {
+  const activeUntilValue = summary?.active_until;
+  const activeUntilMs = new Date(activeUntilValue || "").getTime();
+  const nowMs = Date.now();
+  const hasActiveUntil = Number.isFinite(activeUntilMs);
+  const isActive = hasActiveUntil && activeUntilMs > nowMs;
+  const isExpired = hasActiveUntil && activeUntilMs <= nowMs;
+  const reminderEmailCount = Number(summary?.reminder_email_count || 0);
+  const expiredEmailSent = Boolean(summary?.expired_email_sent);
+  return {
+    bundleState: isActive ? "active" : "expired",
+    isActive,
+    isExpired,
+    reminderEmailCount: Number.isFinite(reminderEmailCount) ? reminderEmailCount : 0,
+    expiredEmailSent
+  };
+}
+
+function logBundleEmailLifecycle({
+  type,
+  bundleId,
+  bundleState,
+  action,
+  reason = "",
+  recipient = "",
+  reminderEmailCount = 0
+}) {
+  console.log("BUNDLECART EMAIL LIFECYCLE", {
+    type: String(type || ""),
+    bundleId: Number(bundleId || 0),
+    bundleState: String(bundleState || "unknown"),
+    action: String(action || ""),
+    reason: String(reason || ""),
+    recipient: String(recipient || "").trim().toLowerCase(),
+    reminderEmailCount: Number(reminderEmailCount || 0)
+  });
+}
+
 function toBillingFailureReason(errorOrReason) {
   const raw =
     typeof errorOrReason === "string"
@@ -1512,11 +1572,19 @@ async function sendBundleStartedEmailNotification(bundleId, fallbackEmail) {
   try {
     const summary = await getBundleNotificationSummary(bundleId);
     const recipient = String(summary?.customer_email || fallbackEmail || "").trim().toLowerCase();
+    const state = deriveBundleEmailState(summary);
     if (!recipient) {
       console.log("BUNDLECART EMAIL SKIPPED", {
         reason: "missing_recipient",
         type: "first_order",
         bundleId: Number(bundleId || 0)
+      });
+      logBundleEmailLifecycle({
+        type: "bundle_started",
+        bundleId,
+        bundleState: state.bundleState,
+        action: "skipped",
+        reason: "missing_recipient"
       });
       return;
     }
@@ -1538,6 +1606,14 @@ async function sendBundleStartedEmailNotification(bundleId, fallbackEmail) {
     });
     await sendBundleCartEmail({ to: recipient, subject: template.subject, html: template.html });
     console.log("BUNDLECART EMAIL BUNDLE STARTED", bundleId, recipient);
+    logBundleEmailLifecycle({
+      type: "bundle_started",
+      bundleId,
+      bundleState: state.bundleState,
+      action: "sent",
+      recipient,
+      reminderEmailCount: state.reminderEmailCount
+    });
   } catch (error) {
     console.error("BUNDLECART EMAIL BUNDLE STARTED ERROR", bundleId, error);
   }
@@ -1551,11 +1627,52 @@ async function sendBundleOrderAddedEmailNotification(bundleId, fallbackEmail) {
   try {
     const summary = await getBundleNotificationSummary(bundleId);
     const recipient = String(summary?.customer_email || fallbackEmail || "").trim().toLowerCase();
+    const state = deriveBundleEmailState(summary);
+    if (!state.isActive) {
+      console.log("BUNDLECART EMAIL SKIPPED", {
+        reason: "bundle_expired",
+        type: "linked_order",
+        bundleId: Number(bundleId || 0)
+      });
+      logBundleEmailLifecycle({
+        type: "linked_order",
+        bundleId,
+        bundleState: state.bundleState,
+        action: "skipped",
+        reason: "bundle_expired",
+        reminderEmailCount: state.reminderEmailCount
+      });
+      return;
+    }
+    if (state.expiredEmailSent) {
+      console.log("BUNDLECART EMAIL SKIPPED", {
+        reason: "expiry_email_already_sent",
+        type: "linked_order",
+        bundleId: Number(bundleId || 0)
+      });
+      logBundleEmailLifecycle({
+        type: "linked_order",
+        bundleId,
+        bundleState: state.bundleState,
+        action: "skipped",
+        reason: "expiry_email_already_sent",
+        reminderEmailCount: state.reminderEmailCount
+      });
+      return;
+    }
     if (!recipient) {
       console.log("BUNDLECART EMAIL SKIPPED", {
         reason: "missing_recipient",
         type: "linked_order",
         bundleId: Number(bundleId || 0)
+      });
+      logBundleEmailLifecycle({
+        type: "linked_order",
+        bundleId,
+        bundleState: state.bundleState,
+        action: "skipped",
+        reason: "missing_recipient",
+        reminderEmailCount: state.reminderEmailCount
       });
       return;
     }
@@ -1577,6 +1694,14 @@ async function sendBundleOrderAddedEmailNotification(bundleId, fallbackEmail) {
     });
     await sendBundleCartEmail({ to: recipient, subject: template.subject, html: template.html });
     console.log("BUNDLECART EMAIL ORDER ADDED", bundleId, recipient);
+    logBundleEmailLifecycle({
+      type: "linked_order",
+      bundleId,
+      bundleState: state.bundleState,
+      action: "sent",
+      recipient,
+      reminderEmailCount: state.reminderEmailCount
+    });
   } catch (error) {
     console.error("BUNDLECART EMAIL ORDER ADDED ERROR", bundleId, error);
   }
@@ -1588,11 +1713,67 @@ async function sendBundleReminderEmail(bundle) {
 
   try {
     const summary = await getBundleNotificationSummary(bundleId);
+    const state = deriveBundleEmailState(summary);
+    if (!state.isActive) {
+      console.log("email skipped - bundle expired", {
+        type: "reminder",
+        bundleId
+      });
+      logBundleEmailLifecycle({
+        type: "reminder",
+        bundleId,
+        bundleState: state.bundleState,
+        action: "skipped",
+        reason: "bundle_expired",
+        reminderEmailCount: state.reminderEmailCount
+      });
+      return false;
+    }
+    if (state.expiredEmailSent) {
+      console.log("BUNDLECART EMAIL SKIPPED", {
+        reason: "expiry_email_already_sent",
+        type: "reminder",
+        bundleId
+      });
+      logBundleEmailLifecycle({
+        type: "reminder",
+        bundleId,
+        bundleState: state.bundleState,
+        action: "skipped",
+        reason: "expiry_email_already_sent",
+        reminderEmailCount: state.reminderEmailCount
+      });
+      return false;
+    }
+    if (state.reminderEmailCount >= 2) {
+      console.log("BUNDLECART EMAIL SKIPPED", {
+        reason: "max_reminders_reached",
+        type: "reminder",
+        bundleId
+      });
+      logBundleEmailLifecycle({
+        type: "reminder",
+        bundleId,
+        bundleState: state.bundleState,
+        action: "skipped",
+        reason: "max_reminders_reached",
+        reminderEmailCount: state.reminderEmailCount
+      });
+      return false;
+    }
     const recipient = String(summary?.customer_email || bundle?.email || "")
       .trim()
       .toLowerCase();
     if (!recipient) {
       console.error("BUNDLECART EMAIL BUNDLE REMINDER ERROR", bundleId, "missing_recipient");
+      logBundleEmailLifecycle({
+        type: "reminder",
+        bundleId,
+        bundleState: state.bundleState,
+        action: "skipped",
+        reason: "missing_recipient",
+        reminderEmailCount: state.reminderEmailCount
+      });
       return false;
     }
 
@@ -1608,6 +1789,14 @@ async function sendBundleReminderEmail(bundle) {
     });
     await sendBundleCartEmail({ to: recipient, subject: template.subject, html: template.html });
     console.log("BUNDLECART EMAIL BUNDLE REMINDER SENT", bundleId, recipient);
+    logBundleEmailLifecycle({
+      type: "reminder",
+      bundleId,
+      bundleState: state.bundleState,
+      action: "sent",
+      recipient,
+      reminderEmailCount: state.reminderEmailCount
+    });
     return true;
   } catch (error) {
     console.error("BUNDLECART EMAIL BUNDLE REMINDER ERROR", bundleId, error);
@@ -1621,11 +1810,52 @@ async function sendBundleExpiredEmail(bundle) {
 
   try {
     const summary = await getBundleNotificationSummary(bundleId);
+    const state = deriveBundleEmailState(summary);
+    if (!state.isExpired) {
+      console.log("BUNDLECART EMAIL SKIPPED", {
+        reason: "bundle_not_expired",
+        type: "expired",
+        bundleId
+      });
+      logBundleEmailLifecycle({
+        type: "expired",
+        bundleId,
+        bundleState: state.bundleState,
+        action: "skipped",
+        reason: "bundle_not_expired",
+        reminderEmailCount: state.reminderEmailCount
+      });
+      return false;
+    }
+    if (state.expiredEmailSent) {
+      console.log("BUNDLECART EMAIL SKIPPED", {
+        reason: "expiry_email_already_sent",
+        type: "expired",
+        bundleId
+      });
+      logBundleEmailLifecycle({
+        type: "expired",
+        bundleId,
+        bundleState: state.bundleState,
+        action: "skipped",
+        reason: "expiry_email_already_sent",
+        reminderEmailCount: state.reminderEmailCount
+      });
+      return false;
+    }
     const recipient = String(summary?.customer_email || bundle?.email || "")
       .trim()
       .toLowerCase();
     if (!recipient) {
       console.error("BUNDLECART EMAIL BUNDLE EXPIRED ERROR", bundleId, "missing_recipient");
+      logBundleEmailLifecycle({
+        type: "expired",
+        bundleId,
+        bundleState: state.bundleState,
+        action: "skipped",
+        reason: "missing_recipient",
+        reminderEmailCount: state.reminderEmailCount
+      });
       return false;
     }
     const orderCount = Number(summary?.order_count || 0);
@@ -1640,6 +1870,14 @@ async function sendBundleExpiredEmail(bundle) {
     });
     await sendBundleCartEmail({ to: recipient, subject: template.subject, html: template.html });
     console.log("BUNDLECART EMAIL BUNDLE EXPIRED SENT", bundleId, recipient);
+    logBundleEmailLifecycle({
+      type: "expired",
+      bundleId,
+      bundleState: state.bundleState,
+      action: "sent",
+      recipient,
+      reminderEmailCount: state.reminderEmailCount
+    });
     return true;
   } catch (error) {
     console.error("BUNDLECART EMAIL BUNDLE EXPIRED ERROR", bundleId, error);
@@ -3155,7 +3393,12 @@ export async function ensureLinkingTablesExist() {
     await dbPool.query(ALTER_LINK_GROUPS_ADD_BUNDLE_PUBLIC_TOKEN_SQL);
     await dbPool.query(ALTER_LINK_GROUPS_ADD_CUSTOMER_ADDRESS_JSON_SQL);
     await dbPool.query(ALTER_LINK_GROUPS_ADD_REMINDER_EMAIL_SENT_SQL);
+    await dbPool.query(ALTER_LINK_GROUPS_ADD_REMINDER_EMAIL_COUNT_SQL);
     await dbPool.query(ALTER_LINK_GROUPS_ADD_EXPIRED_EMAIL_SENT_SQL);
+    await runNonCriticalSchemaQuery(
+      BACKFILL_LINK_GROUPS_REMINDER_EMAIL_COUNT_SQL,
+      "link_groups backfill reminder_email_count"
+    );
     await dbPool.query(BACKFILL_LINK_GROUPS_FIRST_SHOP_DOMAIN_SQL);
     await dbPool.query(CREATE_LINK_GROUPS_BUNDLE_PUBLIC_TOKEN_UNIQUE_INDEX_SQL);
     await dbPool.query(CREATE_LINK_GROUPS_INDEX_SQL);
