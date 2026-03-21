@@ -8,7 +8,9 @@ const EMAIL_PROVIDER = String(
 const RESEND_API_KEY = String(
   process.env.RESEND_API_KEY || process.env.BUNDLECART_EMAIL_API_KEY || ""
 ).trim();
-const EMAIL_FROM = "BundleCart <noreply@mail.bundlecart.app>";
+const EMAIL_FROM = String(
+  process.env.EMAIL_FROM || "BundleCart <noreply@mail.bundlecart.app>"
+).trim();
 
 let resendClient = null;
 let providerConfiguredLogged = false;
@@ -264,6 +266,11 @@ export async function sendEmail({ to, subject, html }) {
   console.log("BUNDLECART EMAIL SEND START", { to: recipient, subject: String(subject || "") });
   try {
     const client = getResendClient();
+    console.log("BUNDLECART EMAIL PROVIDER CALL", {
+      provider: EMAIL_PROVIDER || "unknown",
+      to: recipient,
+      subject: String(subject || "")
+    });
     const { data, error } = await client.emails.send({
       from: EMAIL_FROM,
       to: [recipient],
@@ -275,7 +282,12 @@ export async function sendEmail({ to, subject, html }) {
       throw new Error(`resend_error:${JSON.stringify(error)}`);
     }
 
-    console.log("BUNDLECART EMAIL SEND SUCCESS", { to: recipient, email_id: data?.id || null });
+    const providerMessageId = String(data?.id || "").trim() || null;
+    console.log("BUNDLECART EMAIL SEND SUCCESS", { to: recipient, email_id: providerMessageId });
+    return {
+      provider: "resend",
+      providerMessageId
+    };
   } catch (error) {
     console.error("BUNDLECART EMAIL SEND FAILED", {
       to: recipient,

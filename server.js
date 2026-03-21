@@ -1750,11 +1750,81 @@ async function sendBundleCartEmail({ to, subject, text, html }) {
       .split("\n")
       .map((line) => `<p>${escapeHtmlForEmail(line)}</p>`)
       .join("");
-  await sendEmail({
+  return sendEmail({
     to,
     subject,
     html: renderedHtml
   });
+}
+
+function buildEmailOrderContext(context = {}) {
+  return {
+    orderId: String(context.orderId || "").trim(),
+    shopDomain: normalizeShopDomain(context.shopDomain || ""),
+    bundleId: Number(context.bundleId || 0),
+    bundleToken: String(context.bundleToken || "").trim(),
+    recipient: String(context.recipient || "").trim().toLowerCase(),
+    emailType: String(context.emailType || "").trim().toLowerCase()
+  };
+}
+
+function logBundlecartOrderEmailOutcome({
+  outcome,
+  reason = "",
+  orderId = "",
+  shopDomain = "",
+  recipient = "",
+  subject = "",
+  bundleId = 0,
+  bundleToken = "",
+  emailType = "",
+  providerMessageId = null
+}) {
+  const payload = {
+    orderId: String(orderId || ""),
+    shopDomain: normalizeShopDomain(shopDomain || ""),
+    recipient: String(recipient || "").trim().toLowerCase(),
+    subject: String(subject || ""),
+    bundleId: Number(bundleId || 0),
+    bundleToken: String(bundleToken || "").trim(),
+    emailType: String(emailType || "").trim().toLowerCase(),
+    providerMessageId: providerMessageId ? String(providerMessageId) : null
+  };
+  if (outcome === "sent_first_order") {
+    console.log("BUNDLECART EMAIL SENT FIRST ORDER", payload);
+    return;
+  }
+  if (outcome === "sent_linked_order") {
+    console.log("BUNDLECART EMAIL SENT LINKED ORDER", payload);
+    return;
+  }
+  if (outcome === "provider_error") {
+    console.error("BUNDLECART EMAIL PROVIDER ERROR", {
+      ...payload,
+      reason: String(reason || "provider_error")
+    });
+    return;
+  }
+  console.log("BUNDLECART EMAIL SKIPPED", {
+    ...payload,
+    reason: String(reason || "skipped_unknown")
+  });
+}
+
+function getOrderCustomerEmail(order) {
+  const candidates = [
+    order?.email,
+    order?.customer?.email,
+    order?.contact_email,
+    order?.billing_address?.email
+  ];
+  for (const candidate of candidates) {
+    const normalized = String(candidate || "").trim().toLowerCase();
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return "";
 }
 
 async function getBundleNotificationSummary(bundleId) {
@@ -1765,17 +1835,39 @@ async function getBundleNotificationSummary(bundleId) {
   return result.rows[0] || null;
 }
 
-async function sendBundleStartedEmailNotification(bundleId, fallbackEmail) {
+async function sendBundleStartedEmailNotification(bundleId, fallbackEmail, orderContext = {}) {
+  const context = buildEmailOrderContext({
+    ...orderContext,
+    bundleId,
+    emailType: "first_order"
+  });
   console.log("BUNDLECART EMAIL TRIGGER FIRST ORDER START", {
     bundleId: Number(bundleId || 0),
-    fallbackEmail: String(fallbackEmail || "").trim().toLowerCase()
+    fallbackEmail: String(fallbackEmail || "").trim().toLowerCase(),
+    orderId: context.orderId,
+    shopDomain: context.shopDomain
   });
   try {
     const summary = await getBundleNotificationSummary(bundleId);
-    const recipient = String(summary?.customer_email || fallbackEmail || "").trim().toLowerCase();
+    if (!summary) {
+      console.log("BUNDLECART EMAIL SKIP DETAIL", {
+        reason: "no_bundle_summary",
+        type: "first_order",
+        bundleId: Number(bundleId || 0)
+      });
+      return {
+        status: "skipped",
+        reason: "skipped_no_bundle",
+        recipient: "",
+        subject: "",
+        bundleId: Number(bundleId || 0),
+        providerMessageId: null
+      };
+    }
+    const recipient = String(fallbackEmail || summary?.customer_email || "").trim().toLowerCase();
     const state = deriveBundleEmailState(summary);
     if (!recipient) {
-      console.log("BUNDLECART EMAIL SKIPPED", {
+      console.log("BUNDLECART EMAIL SKIP DETAIL", {
         reason: "missing_recipient",
         type: "first_order",
         bundleId: Number(bundleId || 0)
@@ -1787,7 +1879,14 @@ async function sendBundleStartedEmailNotification(bundleId, fallbackEmail) {
         action: "skipped",
         reason: "missing_recipient"
       });
-      return;
+      return {
+        status: "skipped",
+        reason: "skipped_no_recipient",
+        recipient: "",
+        subject: "",
+        bundleId: Number(summary?.bundle_id || bundleId || 0),
+        providerMessageId: null
+      };
     }
     const orderCount = Number(summary?.order_count || 0);
     const bundleUrl = buildPublicBundleUrl({
@@ -1805,7 +1904,11 @@ async function sendBundleStartedEmailNotification(bundleId, fallbackEmail) {
       orderCount,
       bundleUrl
     });
-    await sendBundleCartEmail({ to: recipient, subject: template.subject, html: template.html });
+    const providerResult = await sendBundleCartEmail({
+      to: recipient,
+      subject: template.subject,
+      html: template.html
+    });
     console.log("BUNDLECART EMAIL BUNDLE STARTED", bundleId, recipient);
     logBundleEmailLifecycle({
       type: "bundle_started",
@@ -1815,22 +1918,60 @@ async function sendBundleStartedEmailNotification(bundleId, fallbackEmail) {
       recipient,
       reminderEmailCount: state.reminderEmailCount
     });
+    return {
+      status: "sent",
+      reason: "",
+      recipient,
+      subject: template.subject,
+      bundleId: Number(summary?.bundle_id || bundleId || 0),
+      providerMessageId: providerResult?.providerMessageId || null
+    };
   } catch (error) {
     console.error("BUNDLECART EMAIL BUNDLE STARTED ERROR", bundleId, error);
+    return {
+      status: "provider_error",
+      reason: String(error?.message || "provider_error"),
+      recipient: String(fallbackEmail || "").trim().toLowerCase(),
+      subject: "Your BundleCart window is open",
+      bundleId: Number(bundleId || 0),
+      providerMessageId: null
+    };
   }
 }
 
-async function sendBundleOrderAddedEmailNotification(bundleId, fallbackEmail) {
+async function sendBundleOrderAddedEmailNotification(bundleId, fallbackEmail, orderContext = {}) {
+  const context = buildEmailOrderContext({
+    ...orderContext,
+    bundleId,
+    emailType: "linked_order"
+  });
   console.log("BUNDLECART EMAIL TRIGGER LINKED ORDER START", {
     bundleId: Number(bundleId || 0),
-    fallbackEmail: String(fallbackEmail || "").trim().toLowerCase()
+    fallbackEmail: String(fallbackEmail || "").trim().toLowerCase(),
+    orderId: context.orderId,
+    shopDomain: context.shopDomain
   });
   try {
     const summary = await getBundleNotificationSummary(bundleId);
-    const recipient = String(summary?.customer_email || fallbackEmail || "").trim().toLowerCase();
+    if (!summary) {
+      console.log("BUNDLECART EMAIL SKIP DETAIL", {
+        reason: "no_bundle_summary",
+        type: "linked_order",
+        bundleId: Number(bundleId || 0)
+      });
+      return {
+        status: "skipped",
+        reason: "skipped_no_bundle",
+        recipient: "",
+        subject: "",
+        bundleId: Number(bundleId || 0),
+        providerMessageId: null
+      };
+    }
+    const recipient = String(fallbackEmail || summary?.customer_email || "").trim().toLowerCase();
     const state = deriveBundleEmailState(summary);
     if (!state.isActive) {
-      console.log("BUNDLECART EMAIL SKIPPED", {
+      console.log("BUNDLECART EMAIL SKIP DETAIL", {
         reason: "bundle_expired",
         type: "linked_order",
         bundleId: Number(bundleId || 0)
@@ -1843,10 +1984,17 @@ async function sendBundleOrderAddedEmailNotification(bundleId, fallbackEmail) {
         reason: "bundle_expired",
         reminderEmailCount: state.reminderEmailCount
       });
-      return;
+      return {
+        status: "skipped",
+        reason: "skipped_expired",
+        recipient,
+        subject: "",
+        bundleId: Number(summary?.bundle_id || bundleId || 0),
+        providerMessageId: null
+      };
     }
     if (state.expiredEmailSent) {
-      console.log("BUNDLECART EMAIL SKIPPED", {
+      console.log("BUNDLECART EMAIL SKIP DETAIL", {
         reason: "expiry_email_already_sent",
         type: "linked_order",
         bundleId: Number(bundleId || 0)
@@ -1859,10 +2007,17 @@ async function sendBundleOrderAddedEmailNotification(bundleId, fallbackEmail) {
         reason: "expiry_email_already_sent",
         reminderEmailCount: state.reminderEmailCount
       });
-      return;
+      return {
+        status: "skipped",
+        reason: "skipped_expired",
+        recipient,
+        subject: "",
+        bundleId: Number(summary?.bundle_id || bundleId || 0),
+        providerMessageId: null
+      };
     }
     if (!recipient) {
-      console.log("BUNDLECART EMAIL SKIPPED", {
+      console.log("BUNDLECART EMAIL SKIP DETAIL", {
         reason: "missing_recipient",
         type: "linked_order",
         bundleId: Number(bundleId || 0)
@@ -1875,7 +2030,14 @@ async function sendBundleOrderAddedEmailNotification(bundleId, fallbackEmail) {
         reason: "missing_recipient",
         reminderEmailCount: state.reminderEmailCount
       });
-      return;
+      return {
+        status: "skipped",
+        reason: "skipped_no_recipient",
+        recipient: "",
+        subject: "",
+        bundleId: Number(summary?.bundle_id || bundleId || 0),
+        providerMessageId: null
+      };
     }
     const orderCount = Number(summary?.order_count || 0);
     const bundleUrl = buildPublicBundleUrl({
@@ -1893,7 +2055,11 @@ async function sendBundleOrderAddedEmailNotification(bundleId, fallbackEmail) {
       orderCount,
       bundleUrl
     });
-    await sendBundleCartEmail({ to: recipient, subject: template.subject, html: template.html });
+    const providerResult = await sendBundleCartEmail({
+      to: recipient,
+      subject: template.subject,
+      html: template.html
+    });
     console.log("BUNDLECART EMAIL ORDER ADDED", bundleId, recipient);
     logBundleEmailLifecycle({
       type: "linked_order",
@@ -1903,8 +2069,24 @@ async function sendBundleOrderAddedEmailNotification(bundleId, fallbackEmail) {
       recipient,
       reminderEmailCount: state.reminderEmailCount
     });
+    return {
+      status: "sent",
+      reason: "",
+      recipient,
+      subject: template.subject,
+      bundleId: Number(summary?.bundle_id || bundleId || 0),
+      providerMessageId: providerResult?.providerMessageId || null
+    };
   } catch (error) {
     console.error("BUNDLECART EMAIL ORDER ADDED ERROR", bundleId, error);
+    return {
+      status: "provider_error",
+      reason: String(error?.message || "provider_error"),
+      recipient: String(fallbackEmail || "").trim().toLowerCase(),
+      subject: "A new order was added to your BundleCart bundle",
+      bundleId: Number(bundleId || 0),
+      providerMessageId: null
+    };
   }
 }
 
@@ -3873,10 +4055,7 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
     orderName,
     webhookId: String(webhookId || "").trim()
   });
-  const email =
-    typeof order.email === "string" && order.email.trim()
-      ? order.email.trim().toLowerCase()
-      : "";
+  const email = getOrderCustomerEmail(order);
   const createdAt = order.created_at || null;
   const totalPrice = order.total_price != null ? String(order.total_price) : null;
   const paidAtTimestamp = createdAt || new Date().toISOString();
@@ -3924,6 +4103,7 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
   }
   let bundleStartedEmailGroupId = null;
   let bundleOrderAddedEmailGroupId = null;
+  let emailDispatchSkipReason = "";
 
   if (!normalizedShopDomain) {
     console.log("MERCHANT SKIPPED missing shop_domain");
@@ -3943,6 +4123,7 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
           orderName
         })
       );
+      emailDispatchSkipReason = "skipped_no_bundle";
     } else {
       let groupId = null;
       let groupBundleToken = "";
@@ -4228,6 +4409,7 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
               bundleToken: groupBundleToken || ""
             })
           );
+          emailDispatchSkipReason = "skipped_duplicate";
         }
       } else {
         console.log(
@@ -4238,6 +4420,7 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
             orderName
           })
         );
+        emailDispatchSkipReason = "skipped_no_bundle";
       }
     }
   } else {
@@ -4293,21 +4476,115 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
   }
 
   if (bundleStartedEmailGroupId != null) {
-    await sendBundleStartedEmailNotification(bundleStartedEmailGroupId, email);
+    const firstOrderEmailResult = await sendBundleStartedEmailNotification(
+      bundleStartedEmailGroupId,
+      email,
+      {
+        orderId,
+        shopDomain: normalizedShopDomain,
+        bundleToken: groupBundleToken || "",
+        recipient: email,
+        emailType: "first_order"
+      }
+    );
+    if (firstOrderEmailResult?.status === "sent") {
+      logBundlecartOrderEmailOutcome({
+        outcome: "sent_first_order",
+        orderId,
+        shopDomain: normalizedShopDomain,
+        recipient: firstOrderEmailResult.recipient,
+        subject: firstOrderEmailResult.subject,
+        bundleId: firstOrderEmailResult.bundleId || bundleStartedEmailGroupId,
+        bundleToken: groupBundleToken || "",
+        providerMessageId: firstOrderEmailResult.providerMessageId
+      });
+    } else if (firstOrderEmailResult?.status === "provider_error") {
+      logBundlecartOrderEmailOutcome({
+        outcome: "provider_error",
+        reason: firstOrderEmailResult.reason || "provider_error",
+        orderId,
+        shopDomain: normalizedShopDomain,
+        recipient: firstOrderEmailResult.recipient || email,
+        subject: firstOrderEmailResult.subject || "",
+        bundleId: firstOrderEmailResult.bundleId || bundleStartedEmailGroupId,
+        bundleToken: groupBundleToken || "",
+        providerMessageId: firstOrderEmailResult.providerMessageId
+      });
+    } else {
+      logBundlecartOrderEmailOutcome({
+        outcome: "skipped",
+        reason: firstOrderEmailResult?.reason || "skipped_unknown",
+        orderId,
+        shopDomain: normalizedShopDomain,
+        recipient: firstOrderEmailResult?.recipient || email,
+        subject: firstOrderEmailResult?.subject || "",
+        bundleId: firstOrderEmailResult?.bundleId || bundleStartedEmailGroupId,
+        bundleToken: groupBundleToken || "",
+        providerMessageId: firstOrderEmailResult?.providerMessageId || null
+      });
+    }
   }
   if (bundleOrderAddedEmailGroupId != null) {
-    await sendBundleOrderAddedEmailNotification(bundleOrderAddedEmailGroupId, email);
+    const linkedOrderEmailResult = await sendBundleOrderAddedEmailNotification(
+      bundleOrderAddedEmailGroupId,
+      email,
+      {
+        orderId,
+        shopDomain: normalizedShopDomain,
+        bundleToken: groupBundleToken || "",
+        recipient: email,
+        emailType: "linked_order"
+      }
+    );
+    if (linkedOrderEmailResult?.status === "sent") {
+      logBundlecartOrderEmailOutcome({
+        outcome: "sent_linked_order",
+        orderId,
+        shopDomain: normalizedShopDomain,
+        recipient: linkedOrderEmailResult.recipient,
+        subject: linkedOrderEmailResult.subject,
+        bundleId: linkedOrderEmailResult.bundleId || bundleOrderAddedEmailGroupId,
+        bundleToken: groupBundleToken || "",
+        providerMessageId: linkedOrderEmailResult.providerMessageId
+      });
+    } else if (linkedOrderEmailResult?.status === "provider_error") {
+      logBundlecartOrderEmailOutcome({
+        outcome: "provider_error",
+        reason: linkedOrderEmailResult.reason || "provider_error",
+        orderId,
+        shopDomain: normalizedShopDomain,
+        recipient: linkedOrderEmailResult.recipient || email,
+        subject: linkedOrderEmailResult.subject || "",
+        bundleId: linkedOrderEmailResult.bundleId || bundleOrderAddedEmailGroupId,
+        bundleToken: groupBundleToken || "",
+        providerMessageId: linkedOrderEmailResult.providerMessageId
+      });
+    } else {
+      logBundlecartOrderEmailOutcome({
+        outcome: "skipped",
+        reason: linkedOrderEmailResult?.reason || "skipped_unknown",
+        orderId,
+        shopDomain: normalizedShopDomain,
+        recipient: linkedOrderEmailResult?.recipient || email,
+        subject: linkedOrderEmailResult?.subject || "",
+        bundleId: linkedOrderEmailResult?.bundleId || bundleOrderAddedEmailGroupId,
+        bundleToken: groupBundleToken || "",
+        providerMessageId: linkedOrderEmailResult?.providerMessageId || null
+      });
+    }
   }
   if (bundlecartSelected && bundleStartedEmailGroupId == null && bundleOrderAddedEmailGroupId == null) {
-    console.log(
-      "BUNDLECART EMAIL SKIPPED",
-      buildBundlecartLogContext({
-        reason: "no_email_trigger_group_available",
-        orderId,
-        orderName,
-        recipient: email || ""
-      })
-    );
+    logBundlecartOrderEmailOutcome({
+      outcome: "skipped",
+      reason: emailDispatchSkipReason || "skipped_no_bundle",
+      orderId,
+      shopDomain: normalizedShopDomain,
+      recipient: email || "",
+      subject: "",
+      bundleId: groupId || 0,
+      bundleToken: groupBundleToken || "",
+      providerMessageId: null
+    });
   }
   console.log("DB STEP shopify_orders insert");
   const result = await runWebhookDbQuery("webhook:shopify_order_insert", INSERT_SHOPIFY_ORDER_SQL, [
