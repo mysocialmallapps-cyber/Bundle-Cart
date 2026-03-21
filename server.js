@@ -1791,21 +1791,21 @@ function logBundlecartOrderEmailOutcome({
     providerMessageId: providerMessageId ? String(providerMessageId) : null
   };
   if (outcome === "sent_first_order") {
-    console.log("BUNDLECART EMAIL SENT FIRST ORDER", payload);
+    console.log("EMAIL_SENT_FIRST_ORDER", payload);
     return;
   }
   if (outcome === "sent_linked_order") {
-    console.log("BUNDLECART EMAIL SENT LINKED ORDER", payload);
+    console.log("EMAIL_SENT_LINKED_ORDER", payload);
     return;
   }
   if (outcome === "provider_error") {
-    console.error("BUNDLECART EMAIL PROVIDER ERROR", {
+    console.error("EMAIL_PROVIDER_ERROR", {
       ...payload,
       reason: String(reason || "provider_error")
     });
     return;
   }
-  console.log("BUNDLECART EMAIL SKIPPED", {
+  console.log("EMAIL_SKIPPED", {
     ...payload,
     reason: String(reason || "skipped_unknown")
   });
@@ -2092,6 +2092,7 @@ async function sendBundleOrderAddedEmailNotification(bundleId, fallbackEmail, or
 
 async function sendBundleReminderEmail(bundle) {
   const bundleId = Number(bundle?.id || 0);
+  console.log("BUNDLECART EMAIL PATH REMINDER", { bundleId });
   console.log("BUNDLECART EMAIL BUNDLE REMINDER START", bundleId);
 
   try {
@@ -2189,6 +2190,7 @@ async function sendBundleReminderEmail(bundle) {
 
 async function sendBundleExpiredEmail(bundle) {
   const bundleId = Number(bundle?.id || 0);
+  console.log("BUNDLECART EMAIL PATH EXPIRY", { bundleId });
   console.log("BUNDLECART EMAIL BUNDLE EXPIRED START", bundleId);
 
   try {
@@ -4103,7 +4105,14 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
   }
   let bundleStartedEmailGroupId = null;
   let bundleOrderAddedEmailGroupId = null;
+  let bundleStartedEmailToken = "";
+  let bundleOrderAddedEmailToken = "";
+  let bundleStartedEmailType = "";
+  let bundleOrderAddedEmailType = "";
   let emailDispatchSkipReason = "";
+  let selectedBundleGroupId = null;
+  let selectedBundleToken = "";
+  let selectedEmailType = "";
 
   if (!normalizedShopDomain) {
     console.log("MERCHANT SKIPPED missing shop_domain");
@@ -4375,12 +4384,18 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
           );
           if (existingWindowFound) {
             bundleOrderAddedEmailGroupId = groupId;
+            bundleOrderAddedEmailToken = groupBundleToken || "";
+            bundleOrderAddedEmailType = "linked_order";
+            selectedEmailType = "linked_order";
             console.log(
               "BUNDLECART EMAIL TRIGGER LINKED ORDER QUEUED",
               buildBundlecartLogContext({ bundleId: groupId, orderId, orderName, recipient: email || "" })
             );
           } else {
             bundleStartedEmailGroupId = groupId;
+            bundleStartedEmailToken = groupBundleToken || "";
+            bundleStartedEmailType = "first_order";
+            selectedEmailType = "first_order";
             console.log(
               "BUNDLECART EMAIL TRIGGER FIRST ORDER QUEUED",
               buildBundlecartLogContext({ bundleId: groupId, orderId, orderName, recipient: email || "" })
@@ -4422,6 +4437,8 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
         );
         emailDispatchSkipReason = "skipped_no_bundle";
       }
+      selectedBundleGroupId = groupId;
+      selectedBundleToken = groupBundleToken || "";
     }
   } else {
     console.log(
@@ -4476,100 +4493,148 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
   }
 
   if (bundleStartedEmailGroupId != null) {
-    const firstOrderEmailResult = await sendBundleStartedEmailNotification(
-      bundleStartedEmailGroupId,
-      email,
-      {
-        orderId,
-        shopDomain: normalizedShopDomain,
-        bundleToken: groupBundleToken || "",
-        recipient: email,
-        emailType: "first_order"
+    console.log("BUNDLECART EMAIL PATH FIRST_ORDER", {
+      orderId,
+      shopDomain: normalizedShopDomain,
+      bundleId: Number(bundleStartedEmailGroupId || 0),
+      bundleToken: bundleStartedEmailToken
+    });
+    try {
+      const firstOrderEmailResult = await sendBundleStartedEmailNotification(
+        bundleStartedEmailGroupId,
+        email,
+        {
+          orderId,
+          shopDomain: normalizedShopDomain,
+          bundleToken: bundleStartedEmailToken,
+          recipient: email,
+          emailType: "first_order"
+        }
+      );
+      if (firstOrderEmailResult?.status === "sent") {
+        logBundlecartOrderEmailOutcome({
+          outcome: "sent_first_order",
+          orderId,
+          shopDomain: normalizedShopDomain,
+          recipient: firstOrderEmailResult.recipient,
+          subject: firstOrderEmailResult.subject,
+          bundleId: firstOrderEmailResult.bundleId || bundleStartedEmailGroupId,
+          bundleToken: bundleStartedEmailToken,
+          emailType: bundleStartedEmailType || "first_order",
+          providerMessageId: firstOrderEmailResult.providerMessageId
+        });
+      } else if (firstOrderEmailResult?.status === "provider_error") {
+        logBundlecartOrderEmailOutcome({
+          outcome: "provider_error",
+          reason: firstOrderEmailResult.reason || "provider_error",
+          orderId,
+          shopDomain: normalizedShopDomain,
+          recipient: firstOrderEmailResult.recipient || email,
+          subject: firstOrderEmailResult.subject || "",
+          bundleId: firstOrderEmailResult.bundleId || bundleStartedEmailGroupId,
+          bundleToken: bundleStartedEmailToken,
+          emailType: bundleStartedEmailType || "first_order",
+          providerMessageId: firstOrderEmailResult.providerMessageId
+        });
+      } else {
+        logBundlecartOrderEmailOutcome({
+          outcome: "skipped",
+          reason: firstOrderEmailResult?.reason || "skipped_unknown",
+          orderId,
+          shopDomain: normalizedShopDomain,
+          recipient: firstOrderEmailResult?.recipient || email,
+          subject: firstOrderEmailResult?.subject || "",
+          bundleId: firstOrderEmailResult?.bundleId || bundleStartedEmailGroupId,
+          bundleToken: bundleStartedEmailToken,
+          emailType: bundleStartedEmailType || "first_order",
+          providerMessageId: firstOrderEmailResult?.providerMessageId || null
+        });
       }
-    );
-    if (firstOrderEmailResult?.status === "sent") {
-      logBundlecartOrderEmailOutcome({
-        outcome: "sent_first_order",
-        orderId,
-        shopDomain: normalizedShopDomain,
-        recipient: firstOrderEmailResult.recipient,
-        subject: firstOrderEmailResult.subject,
-        bundleId: firstOrderEmailResult.bundleId || bundleStartedEmailGroupId,
-        bundleToken: groupBundleToken || "",
-        providerMessageId: firstOrderEmailResult.providerMessageId
-      });
-    } else if (firstOrderEmailResult?.status === "provider_error") {
+    } catch (error) {
       logBundlecartOrderEmailOutcome({
         outcome: "provider_error",
-        reason: firstOrderEmailResult.reason || "provider_error",
+        reason: String(error?.message || "first_order_email_runtime_error"),
         orderId,
         shopDomain: normalizedShopDomain,
-        recipient: firstOrderEmailResult.recipient || email,
-        subject: firstOrderEmailResult.subject || "",
-        bundleId: firstOrderEmailResult.bundleId || bundleStartedEmailGroupId,
-        bundleToken: groupBundleToken || "",
-        providerMessageId: firstOrderEmailResult.providerMessageId
-      });
-    } else {
-      logBundlecartOrderEmailOutcome({
-        outcome: "skipped",
-        reason: firstOrderEmailResult?.reason || "skipped_unknown",
-        orderId,
-        shopDomain: normalizedShopDomain,
-        recipient: firstOrderEmailResult?.recipient || email,
-        subject: firstOrderEmailResult?.subject || "",
-        bundleId: firstOrderEmailResult?.bundleId || bundleStartedEmailGroupId,
-        bundleToken: groupBundleToken || "",
-        providerMessageId: firstOrderEmailResult?.providerMessageId || null
+        recipient: email,
+        subject: "Your BundleCart window is open",
+        bundleId: bundleStartedEmailGroupId,
+        bundleToken: bundleStartedEmailToken,
+        emailType: bundleStartedEmailType || "first_order",
+        providerMessageId: null
       });
     }
   }
   if (bundleOrderAddedEmailGroupId != null) {
-    const linkedOrderEmailResult = await sendBundleOrderAddedEmailNotification(
-      bundleOrderAddedEmailGroupId,
-      email,
-      {
-        orderId,
-        shopDomain: normalizedShopDomain,
-        bundleToken: groupBundleToken || "",
-        recipient: email,
-        emailType: "linked_order"
+    console.log("BUNDLECART EMAIL PATH LINKED_ORDER", {
+      orderId,
+      shopDomain: normalizedShopDomain,
+      bundleId: Number(bundleOrderAddedEmailGroupId || 0),
+      bundleToken: bundleOrderAddedEmailToken
+    });
+    try {
+      const linkedOrderEmailResult = await sendBundleOrderAddedEmailNotification(
+        bundleOrderAddedEmailGroupId,
+        email,
+        {
+          orderId,
+          shopDomain: normalizedShopDomain,
+          bundleToken: bundleOrderAddedEmailToken,
+          recipient: email,
+          emailType: "linked_order"
+        }
+      );
+      if (linkedOrderEmailResult?.status === "sent") {
+        logBundlecartOrderEmailOutcome({
+          outcome: "sent_linked_order",
+          orderId,
+          shopDomain: normalizedShopDomain,
+          recipient: linkedOrderEmailResult.recipient,
+          subject: linkedOrderEmailResult.subject,
+          bundleId: linkedOrderEmailResult.bundleId || bundleOrderAddedEmailGroupId,
+          bundleToken: bundleOrderAddedEmailToken,
+          emailType: bundleOrderAddedEmailType || "linked_order",
+          providerMessageId: linkedOrderEmailResult.providerMessageId
+        });
+      } else if (linkedOrderEmailResult?.status === "provider_error") {
+        logBundlecartOrderEmailOutcome({
+          outcome: "provider_error",
+          reason: linkedOrderEmailResult.reason || "provider_error",
+          orderId,
+          shopDomain: normalizedShopDomain,
+          recipient: linkedOrderEmailResult.recipient || email,
+          subject: linkedOrderEmailResult.subject || "",
+          bundleId: linkedOrderEmailResult.bundleId || bundleOrderAddedEmailGroupId,
+          bundleToken: bundleOrderAddedEmailToken,
+          emailType: bundleOrderAddedEmailType || "linked_order",
+          providerMessageId: linkedOrderEmailResult.providerMessageId
+        });
+      } else {
+        logBundlecartOrderEmailOutcome({
+          outcome: "skipped",
+          reason: linkedOrderEmailResult?.reason || "skipped_unknown",
+          orderId,
+          shopDomain: normalizedShopDomain,
+          recipient: linkedOrderEmailResult?.recipient || email,
+          subject: linkedOrderEmailResult?.subject || "",
+          bundleId: linkedOrderEmailResult?.bundleId || bundleOrderAddedEmailGroupId,
+          bundleToken: bundleOrderAddedEmailToken,
+          emailType: bundleOrderAddedEmailType || "linked_order",
+          providerMessageId: linkedOrderEmailResult?.providerMessageId || null
+        });
       }
-    );
-    if (linkedOrderEmailResult?.status === "sent") {
-      logBundlecartOrderEmailOutcome({
-        outcome: "sent_linked_order",
-        orderId,
-        shopDomain: normalizedShopDomain,
-        recipient: linkedOrderEmailResult.recipient,
-        subject: linkedOrderEmailResult.subject,
-        bundleId: linkedOrderEmailResult.bundleId || bundleOrderAddedEmailGroupId,
-        bundleToken: groupBundleToken || "",
-        providerMessageId: linkedOrderEmailResult.providerMessageId
-      });
-    } else if (linkedOrderEmailResult?.status === "provider_error") {
+    } catch (error) {
       logBundlecartOrderEmailOutcome({
         outcome: "provider_error",
-        reason: linkedOrderEmailResult.reason || "provider_error",
+        reason: String(error?.message || "linked_order_email_runtime_error"),
         orderId,
         shopDomain: normalizedShopDomain,
-        recipient: linkedOrderEmailResult.recipient || email,
-        subject: linkedOrderEmailResult.subject || "",
-        bundleId: linkedOrderEmailResult.bundleId || bundleOrderAddedEmailGroupId,
-        bundleToken: groupBundleToken || "",
-        providerMessageId: linkedOrderEmailResult.providerMessageId
-      });
-    } else {
-      logBundlecartOrderEmailOutcome({
-        outcome: "skipped",
-        reason: linkedOrderEmailResult?.reason || "skipped_unknown",
-        orderId,
-        shopDomain: normalizedShopDomain,
-        recipient: linkedOrderEmailResult?.recipient || email,
-        subject: linkedOrderEmailResult?.subject || "",
-        bundleId: linkedOrderEmailResult?.bundleId || bundleOrderAddedEmailGroupId,
-        bundleToken: groupBundleToken || "",
-        providerMessageId: linkedOrderEmailResult?.providerMessageId || null
+        recipient: email,
+        subject: "A new order was added to your BundleCart bundle",
+        bundleId: bundleOrderAddedEmailGroupId,
+        bundleToken: bundleOrderAddedEmailToken,
+        emailType: bundleOrderAddedEmailType || "linked_order",
+        providerMessageId: null
       });
     }
   }
@@ -4581,8 +4646,9 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
       shopDomain: normalizedShopDomain,
       recipient: email || "",
       subject: "",
-      bundleId: groupId || 0,
-      bundleToken: groupBundleToken || "",
+      bundleId: selectedBundleGroupId || 0,
+      bundleToken: selectedBundleToken || "",
+      emailType: selectedEmailType || (bundlecartSelected ? "first_order" : ""),
       providerMessageId: null
     });
   }
