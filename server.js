@@ -163,6 +163,23 @@ CREATE TABLE IF NOT EXISTS linked_orders (
 );
 `;
 
+const CREATE_BUNDLECART_FEE_EVENTS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS bundlecart_fee_events (
+  id SERIAL PRIMARY KEY,
+  group_id INTEGER NOT NULL REFERENCES link_groups(id) ON DELETE CASCADE,
+  creator_shop_domain TEXT NOT NULL,
+  shopify_order_id BIGINT NOT NULL,
+  order_name TEXT,
+  fee_amount NUMERIC(10,2) NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+`;
+
+const CREATE_BUNDLECART_FEE_EVENTS_UNIQUE_INDEX_SQL = `
+CREATE UNIQUE INDEX IF NOT EXISTS bundlecart_fee_events_group_order_uq
+ON bundlecart_fee_events (group_id, shopify_order_id);
+`;
+
 const CREATE_BUNDLECART_BILLING_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS bundlecart_billing (
   id SERIAL PRIMARY KEY,
@@ -302,6 +319,7 @@ ON CONFLICT (shop_domain, shopify_order_id) DO NOTHING
 RETURNING id;
 `;
 
+
 const SELECT_MATCHING_GROUP_FOR_PAID_SQL = `
 SELECT id
 FROM link_groups
@@ -412,6 +430,27 @@ SET last_seen_at = NOW(),
     first_paid_order_id = $4::bigint,
     first_shop_domain = COALESCE($5::text, first_shop_domain)
 WHERE id = $1::integer;
+`;
+
+const INSERT_BUNDLECART_FEE_EVENT_SQL = `
+INSERT INTO bundlecart_fee_events (
+  group_id,
+  creator_shop_domain,
+  shopify_order_id,
+  order_name,
+  fee_amount,
+  created_at
+)
+VALUES (
+  $1::integer,
+  $2::text,
+  $3::bigint,
+  $4::text,
+  $5::numeric,
+  COALESCE($6::timestamp, NOW())
+)
+ON CONFLICT (group_id, shopify_order_id) DO NOTHING
+RETURNING id;
 `;
 
 const UPDATE_LINK_GROUP_METADATA_SQL = `
@@ -617,14 +656,10 @@ orders_in_bundles_created AS (
   WHERE LOWER(TRIM(COALESCE(lg.first_shop_domain, ''))) = ns.shop_domain
 ),
 fees_collected AS (
-  SELECT COALESCE(SUM(lo.bundlecart_fee_amount), 0)::numeric AS value
-  FROM link_groups lg
-  JOIN linked_orders lo ON lo.group_id = lg.id
+  SELECT COALESCE(SUM(bfe.fee_amount), 0)::numeric AS value
+  FROM bundlecart_fee_events bfe
   CROSS JOIN normalized_shop ns
-  WHERE LOWER(TRIM(COALESCE(lg.first_shop_domain, ''))) = ns.shop_domain
-    AND LOWER(TRIM(COALESCE(lo.shop_domain, ''))) = ns.shop_domain
-    AND lo.bundlecart_paid = TRUE
-    AND lo.shopify_order_id = lg.first_paid_order_id
+  WHERE LOWER(TRIM(COALESCE(bfe.creator_shop_domain, ''))) = ns.shop_domain
 )
 SELECT
   bc.value AS bundles_created,
@@ -3962,6 +3997,8 @@ export async function ensureLinkingTablesExist() {
     await dbPool.query(ALTER_LINKED_ORDERS_ADD_CREATED_AT_SQL);
     await dbPool.query(ALTER_LINKED_ORDERS_ADD_INSERTED_AT_SQL);
     await dbPool.query(CREATE_LINKED_ORDERS_UNIQUE_INDEX_SQL);
+    await dbPool.query(CREATE_BUNDLECART_FEE_EVENTS_TABLE_SQL);
+    await dbPool.query(CREATE_BUNDLECART_FEE_EVENTS_UNIQUE_INDEX_SQL);
     console.log("MIGRATION DONE linked_orders");
     console.log("DB SCHEMA OK linked_orders");
   } catch (error) {
@@ -3989,6 +4026,26 @@ export async function ensureBillingTablesExist() {
     console.log("DB SCHEMA OK bundlecart_billing");
   } catch (error) {
     console.error("MIGRATION ERROR bundlecart_billing", error);
+    if (isFatalDbError(error)) {
+      throw error;
+    }
+  }
+}
+
+export async function ensureBundlecartFeeEventsTableExists() {
+  if (!dbPool) {
+    console.warn("DATABASE_URL not set; bundlecart fee events persistence disabled.");
+    return;
+  }
+
+  console.log("MIGRATION START bundlecart_fee_events");
+  try {
+    await dbPool.query(CREATE_BUNDLECART_FEE_EVENTS_TABLE_SQL);
+    await dbPool.query(CREATE_BUNDLECART_FEE_EVENTS_UNIQUE_INDEX_SQL);
+    console.log("MIGRATION DONE bundlecart_fee_events");
+    console.log("DB SCHEMA OK bundlecart_fee_events");
+  } catch (error) {
+    console.error("MIGRATION ERROR bundlecart_fee_events", error);
     if (isFatalDbError(error)) {
       throw error;
     }
@@ -4387,6 +4444,13 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
             bundleOrderAddedEmailToken = groupBundleToken || "";
             bundleOrderAddedEmailType = "linked_order";
             selectedEmailType = "linked_order";
+            console.log("BUNDLECART FEE SKIPPED", {
+              reason: "not_first_order",
+              shopDomain: normalizedShopDomain,
+              bundleId: Number(groupId || 0),
+              orderId,
+              feeAmount: Number(bundlecartFeeAmount || 0)
+            });
             console.log(
               "BUNDLECART EMAIL TRIGGER LINKED ORDER QUEUED",
               buildBundlecartLogContext({ bundleId: groupId, orderId, orderName, recipient: email || "" })
@@ -4396,6 +4460,49 @@ async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPa
             bundleStartedEmailToken = groupBundleToken || "";
             bundleStartedEmailType = "first_order";
             selectedEmailType = "first_order";
+            if (customerFeeConfirmed) {
+              console.log("BUNDLECART PAID SHIPPING DETECTED", {
+                shopDomain: normalizedShopDomain,
+                bundleId: Number(groupId || 0),
+                orderId,
+                feeAmount: Number(bundlecartFeeAmount || 0)
+              });
+              const feeInsertResult = await runWebhookDbQuery(
+                "webhook:bundlecart_fee_event_insert",
+                INSERT_BUNDLECART_FEE_EVENT_SQL,
+                [
+                  groupId,
+                  normalizedShopDomain,
+                  orderId,
+                  orderName || null,
+                  bundlecartFeeAmount,
+                  createdAt
+                ]
+              );
+              if (feeInsertResult.rowCount > 0) {
+                console.log("BUNDLECART FIRST ORDER FEE STORED", {
+                  shopDomain: normalizedShopDomain,
+                  bundleId: Number(groupId || 0),
+                  orderId,
+                  feeAmount: Number(bundlecartFeeAmount || 0)
+                });
+              } else {
+                console.log("BUNDLECART DUPLICATE FEE PREVENTED", {
+                  shopDomain: normalizedShopDomain,
+                  bundleId: Number(groupId || 0),
+                  orderId,
+                  feeAmount: Number(bundlecartFeeAmount || 0)
+                });
+              }
+            } else if (bundlecartSelected) {
+              console.log("BUNDLECART FEE SKIPPED", {
+                reason: "first_order_not_paid_bundlecart",
+                shopDomain: normalizedShopDomain,
+                bundleId: Number(groupId || 0),
+                orderId,
+                feeAmount: Number(bundlecartFeeAmount || 0)
+              });
+            }
             console.log(
               "BUNDLECART EMAIL TRIGGER FIRST ORDER QUEUED",
               buildBundlecartLogContext({ bundleId: groupId, orderId, orderName, recipient: email || "" })
@@ -5626,6 +5733,7 @@ export function createApp() {
         creatorBundlesFound: payload.bundles_created,
         bundledOrdersFound: payload.orders_bundled,
         networkOrdersFound: payload.network_orders,
+        bundlecartFeesCollected: payload.bundlecart_fees_collected,
         metricPayload: payload
       });
       res.json(payload);
@@ -6096,6 +6204,7 @@ const isDirectRun =
 if (isDirectRun && process.env.NODE_ENV !== "test") {
   ensureOrdersTableExists()
     .then(() => ensureLinkingTablesExist())
+    .then(() => ensureBundlecartFeeEventsTableExists())
     .then(() => ensureBillingTablesExist())
     .then(() => ensureMerchantBillingSubscriptionsTableExists())
     .catch((error) => {
