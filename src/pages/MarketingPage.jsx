@@ -1,6 +1,10 @@
 import { useState } from "react";
 
 const SHOP_DOMAIN_SUFFIX = ".myshopify.com";
+const DEMO_VIDEO_FILE_ID = "18gjEj3JhYfnLAAFT_hhecxyzIq_8K5Qm";
+const DEMO_VIDEO_SHARE_URL = `https://drive.google.com/file/d/${DEMO_VIDEO_FILE_ID}/view?usp=drive_link`;
+const DEMO_VIDEO_DIRECT_URL = `https://drive.google.com/uc?export=download&id=${DEMO_VIDEO_FILE_ID}`;
+const DEMO_VIDEO_PREVIEW_URL = `https://drive.google.com/file/d/${DEMO_VIDEO_FILE_ID}/preview`;
 
 function normalizeShopDomainInput(value) {
   const trimmed = String(value || "").trim().toLowerCase();
@@ -161,6 +165,7 @@ export default function MarketingPage() {
   const [isInstallModalOpen, setIsInstallModalOpen] = useState(false);
   const [shopDomainInput, setShopDomainInput] = useState("");
   const [installError, setInstallError] = useState("");
+  const [useDriveEmbedFallback, setUseDriveEmbedFallback] = useState(false);
 
   function openInstallModal() {
     setInstallError("");
@@ -232,7 +237,45 @@ export default function MarketingPage() {
           </div>
           <p className="marketing-hero-note">First month free • Built for Shopify • No fulfillment changes</p>
         </div>
-        <aside className="marketing-preview-card" aria-label="BundleCart product preview">
+        <aside className="marketing-preview-card marketing-preview-media-card" aria-label="BundleCart product preview">
+          <p className="marketing-preview-title">Watch BundleCart in action</p>
+          <div className="marketing-demo-media">
+            {useDriveEmbedFallback ? (
+              <iframe
+                className="marketing-demo-embed"
+                src={`${DEMO_VIDEO_PREVIEW_URL}?autoplay=1`}
+                title="BundleCart demo video"
+                loading="lazy"
+                allow="autoplay; encrypted-media; picture-in-picture"
+                allowFullScreen
+              />
+            ) : (
+              <video
+                className="marketing-demo-video"
+                autoPlay
+                muted
+                loop
+                playsInline
+                preload="metadata"
+                poster="/logo.png"
+                onError={() => setUseDriveEmbedFallback(true)}
+              >
+                <source src={`${DEMO_VIDEO_DIRECT_URL}&confirm=t`} type="video/mp4" />
+              </video>
+            )}
+          </div>
+          <p className="marketing-preview-foot">
+            See how customers open a 72-hour window and keep placing BundleCart orders.
+          </p>
+          <a
+            className="marketing-preview-link"
+            href={DEMO_VIDEO_SHARE_URL}
+            target="_blank"
+            rel="noreferrer"
+            title="Open demo in Google Drive"
+          >
+            Open demo video
+          </a>
           <p className="marketing-preview-title">BundleCart performance snapshot</p>
           <div className="marketing-preview-grid">
             <article>

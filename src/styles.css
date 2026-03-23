@@ -600,6 +600,35 @@ input:focus {
   line-height: 1.45;
 }
 
+.marketing-video-wrap {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.marketing-video-frame {
+  margin: 0;
+  border-radius: 18px;
+  overflow: hidden;
+  border: 1px solid #e4ddff;
+  background: #120b2f;
+  box-shadow: 0 16px 28px rgba(37, 25, 84, 0.16);
+}
+
+.marketing-hero-video {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 0;
+  display: block;
+}
+
+.marketing-video-note {
+  margin: 0;
+  color: #5e5877;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
 .marketing-trust-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(140px, 1fr));
