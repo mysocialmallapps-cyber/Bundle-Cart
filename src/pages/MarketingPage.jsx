@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 
 const SHOP_DOMAIN_SUFFIX = ".myshopify.com";
-const DEMO_VIDEO_SOURCE = "/bundlecart-demo.mp4";
-const DEMO_VIDEO_POSTER_SOURCE = "/bundlecart-demo-poster.jpg";
+const DEMO_VIDEO_SOURCE = "/bundlecart-demo.mp4?v=2";
+const DEMO_VIDEO_POSTER_SOURCE = "/bundlecart-demo-poster.jpg?v=2";
 const DEMO_VIDEO_POSTER_FALLBACK = "/logo.png";
 
 function normalizeShopDomainInput(value) {
