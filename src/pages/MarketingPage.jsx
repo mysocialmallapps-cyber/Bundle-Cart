@@ -1,9 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
 const SHOP_DOMAIN_SUFFIX = ".myshopify.com";
-const DEMO_VIDEO_SOURCE = "/bundlecart-demo.mp4?v=2";
-const DEMO_VIDEO_POSTER_SOURCE = "/bundlecart-demo-poster.jpg?v=2";
-const DEMO_VIDEO_POSTER_FALLBACK = "/logo.png";
 
 function normalizeShopDomainInput(value) {
   const trimmed = String(value || "").trim().toLowerCase();
@@ -161,33 +158,9 @@ const FAQ_ITEMS = [
 ];
 
 export default function MarketingPage() {
-  const demoVideoRef = useRef(null);
   const [isInstallModalOpen, setIsInstallModalOpen] = useState(false);
   const [shopDomainInput, setShopDomainInput] = useState("");
   const [installError, setInstallError] = useState("");
-  const [isDemoPlaying, setIsDemoPlaying] = useState(false);
-  const [autoplayBlocked, setAutoplayBlocked] = useState(false);
-  const [videoUnavailable, setVideoUnavailable] = useState(false);
-  const [demoPosterSource, setDemoPosterSource] = useState(DEMO_VIDEO_POSTER_SOURCE);
-
-  useEffect(() => {
-    const videoElement = demoVideoRef.current;
-    if (!videoElement) {
-      return;
-    }
-    const autoplayAttempt = videoElement.play();
-    if (autoplayAttempt && typeof autoplayAttempt.catch === "function") {
-      autoplayAttempt
-        .then(() => {
-          setIsDemoPlaying(true);
-          setAutoplayBlocked(false);
-        })
-        .catch(() => {
-          setIsDemoPlaying(false);
-          setAutoplayBlocked(true);
-        });
-    }
-  }, []);
 
   function openInstallModal() {
     setInstallError("");
@@ -209,35 +182,6 @@ export default function MarketingPage() {
     if (typeof window !== "undefined") {
       window.location.assign(`/auth?shop=${encodeURIComponent(normalized)}`);
     }
-  }
-
-  function handleDemoToggle(event) {
-    event.preventDefault();
-    event.stopPropagation();
-    if (videoUnavailable) {
-      return;
-    }
-    const videoElement = demoVideoRef.current;
-    if (!videoElement) {
-      return;
-    }
-    if (videoElement.paused) {
-      const playAttempt = videoElement.play();
-      if (playAttempt && typeof playAttempt.catch === "function") {
-        playAttempt
-          .then(() => {
-            setIsDemoPlaying(true);
-            setAutoplayBlocked(false);
-          })
-          .catch(() => {
-            setIsDemoPlaying(false);
-            setAutoplayBlocked(true);
-          });
-      }
-      return;
-    }
-    videoElement.pause();
-    setIsDemoPlaying(false);
   }
 
   return (
@@ -290,56 +234,12 @@ export default function MarketingPage() {
         </div>
         <aside className="marketing-preview-card marketing-preview-media-card" aria-label="BundleCart product preview">
           <p className="marketing-preview-title">Watch BundleCart in action</p>
-          <div className="marketing-demo-media-shell">
-            <video
-              ref={demoVideoRef}
-              className="marketing-demo-video"
-              autoPlay
-              muted
-              loop
-              playsInline
-              preload="metadata"
-              poster={demoPosterSource}
-              onPlay={() => {
-                setIsDemoPlaying(true);
-                setAutoplayBlocked(false);
-              }}
-              onPause={() => setIsDemoPlaying(false)}
-              onError={() => {
-                setVideoUnavailable(true);
-                setIsDemoPlaying(false);
-                setAutoplayBlocked(true);
-              }}
-            >
-              <source src={DEMO_VIDEO_SOURCE} type="video/mp4" />
-            </video>
-            {videoUnavailable ? (
-              <div className="marketing-demo-fallback" role="status" aria-live="polite">
-                <img src="/logo.png" alt="" />
-                <p>Demo video unavailable</p>
-                <span>Add {DEMO_VIDEO_SOURCE} in /public</span>
-              </div>
-            ) : null}
-            {!videoUnavailable && (autoplayBlocked || !isDemoPlaying) ? (
-              <button
-                type="button"
-                className="marketing-demo-overlay-play"
-                onClick={handleDemoToggle}
-                title={isDemoPlaying ? "Pause demo video" : "Play demo video"}
-              >
-                {isDemoPlaying ? "Pause demo" : "Play demo"}
-              </button>
-            ) : null}
-            {!videoUnavailable ? (
-              <button
-                type="button"
-                className="marketing-demo-toggle"
-                onClick={handleDemoToggle}
-                title={isDemoPlaying ? "Pause demo video" : "Play demo video"}
-              >
-                {isDemoPlaying ? "Pause" : "Play"}
-              </button>
-            ) : null}
+          <div className="marketing-hero-image-shell">
+            <img
+              src="/bundlecart-hero.png?v=2"
+              className="marketing-hero-image"
+              alt="BundleCart live in Shopify checkout"
+            />
           </div>
           <p className="marketing-preview-foot">
             See how customers open a 72-hour window and keep placing BundleCart orders.
