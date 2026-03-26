@@ -206,11 +206,18 @@ export default function MarketingPage() {
       <section className="marketing-hero">
         <div className="marketing-hero-content">
           <div>
-            <p className="marketing-eyebrow">BundleCart for Shopify</p>
-            <h1>Pay shipping once. Turn one order into many.</h1>
+            <p className="marketing-eyebrow">BUNDLECART FOR SHOPIFY</p>
+            <h1>
+              Pay shipping once.
+              <br />
+              Shop more stores for free.
+            </h1>
             <p className="marketing-subheadline">
-              BundleCart helps Shopify stores drive extra orders by letting customers open a 72-hour
-              shipping window and add more orders with free BundleCart shipping.
+              Buy from multiple stores.
+              <br />
+              Only pay shipping one time.
+              <br />
+              Everything else ships free for 72 hours.
             </p>
           </div>
           <div className="marketing-cta-row">
@@ -230,10 +237,11 @@ export default function MarketingPage() {
               See how it works
             </a>
           </div>
-          <p className="marketing-hero-note">First month free • Built for Shopify • No fulfillment changes</p>
+          <p className="marketing-hero-note">First month free • Built for Shopify • No fulfilment changes</p>
+          <div className="marketing-hero-message-bar">BundleCart — Pay once. Ship everywhere.</div>
         </div>
         <aside className="marketing-preview-card marketing-preview-media-card" aria-label="BundleCart product preview">
-          <p className="marketing-preview-title">Watch BundleCart in action</p>
+          <p className="marketing-preview-title">See BundleCart in checkout</p>
           <div className="marketing-hero-container">
             <img
               src="/bundlecart-hero.png?v=2"
@@ -242,9 +250,24 @@ export default function MarketingPage() {
             />
           </div>
           <p className="marketing-preview-foot">
-            See how customers open a 72-hour window and keep placing BundleCart orders.
+            Customers pay once, then keep ordering with free shipping for 72 hours.
           </p>
-          <p className="marketing-preview-title">BundleCart performance snapshot</p>
+          <div className="marketing-quick-steps" aria-label="How BundleCart works">
+            <article className="marketing-quick-step">
+              <span>Step 1</span>
+              <strong>Shop from any store</strong>
+            </article>
+            <article className="marketing-quick-step">
+              <span>Step 2</span>
+              <strong>Pay shipping once ($5)</strong>
+            </article>
+            <article className="marketing-quick-step">
+              <span>Step 3</span>
+              <strong>Get 72hrs free shipping</strong>
+            </article>
+          </div>
+          <p className="marketing-preview-title">Why stores use BundleCart</p>
+          <p className="marketing-preview-foot">More orders without more ads.</p>
           <div className="marketing-preview-grid">
             <article>
               <span>Bundles created</span>
