@@ -15,19 +15,16 @@ function isValidShopDomain(value) {
 
 const HOW_IT_WORKS_STEPS = [
   {
-    icon: "🛒",
-    title: "Customer chooses BundleCart at checkout",
-    body: "BundleCart appears as a shipping option. The first eligible order uses a fixed $5 BundleCart fee."
+    step: "Step 1",
+    text: "Shop from any store"
   },
   {
-    icon: "⏱️",
-    title: "A 72-hour bundle window opens",
-    body: "The first order opens a window tied to the customer address, giving shoppers time to place additional orders."
+    step: "Step 2",
+    text: "Pay shipping once ($5)"
   },
   {
-    icon: "📦",
-    title: "Additional orders ship with free BundleCart shipping",
-    body: "During the active window, customers can place more BundleCart orders across participating stores at $0 BundleCart shipping."
+    step: "Step 3",
+    text: "Get 72hrs free shipping"
   }
 ];
 
@@ -210,12 +207,12 @@ export default function MarketingPage() {
             <h1>
               Pay shipping once.
               <br />
-              Shop more stores for free.
+              Everything else ships free.
             </h1>
             <p className="marketing-subheadline">
-              Buy from multiple stores.
+              Buy from different stores.
               <br />
-              Only pay shipping one time.
+              Only pay shipping the first time.
               <br />
               Everything else ships free for 72 hours.
             </p>
@@ -241,7 +238,7 @@ export default function MarketingPage() {
           <div className="marketing-hero-message-bar">BundleCart — Pay once. Ship everywhere.</div>
         </div>
         <aside className="marketing-preview-card marketing-preview-media-card" aria-label="BundleCart product preview">
-          <p className="marketing-preview-title">See BundleCart in checkout</p>
+          <p className="marketing-preview-title">See it in checkout</p>
           <div className="marketing-hero-container">
             <img
               src="/bundlecart-hero.png?v=2"
@@ -249,23 +246,7 @@ export default function MarketingPage() {
               alt="BundleCart live in Shopify checkout"
             />
           </div>
-          <p className="marketing-preview-foot">
-            Customers pay once, then keep ordering with free shipping for 72 hours.
-          </p>
-          <div className="marketing-quick-steps" aria-label="How BundleCart works">
-            <article className="marketing-quick-step">
-              <span>Step 1</span>
-              <strong>Shop from any store</strong>
-            </article>
-            <article className="marketing-quick-step">
-              <span>Step 2</span>
-              <strong>Pay shipping once ($5)</strong>
-            </article>
-            <article className="marketing-quick-step">
-              <span>Step 3</span>
-              <strong>Get 72hrs free shipping</strong>
-            </article>
-          </div>
+          <p className="marketing-preview-foot">Customers pay once, then keep ordering with free shipping.</p>
           <p className="marketing-preview-title">Why stores use BundleCart</p>
           <p className="marketing-preview-foot">More orders without more ads.</p>
           <div className="marketing-preview-grid">
@@ -302,14 +283,12 @@ export default function MarketingPage() {
       </section>
 
       <section id="how-it-works" className="marketing-section">
-        <h2>How BundleCart works</h2>
-        <div className="marketing-grid marketing-grid-3">
-          {HOW_IT_WORKS_STEPS.map((step, index) => (
-            <article key={step.title} className="marketing-step-card">
-              <p className="marketing-step-index">Step {index + 1}</p>
-              <p className="marketing-step-icon">{step.icon}</p>
-              <h3>{step.title}</h3>
-              <p>{step.body}</p>
+        <h2>How it works</h2>
+        <div className="marketing-how-steps">
+          {HOW_IT_WORKS_STEPS.map((step) => (
+            <article key={step.step} className="marketing-how-step">
+              <span>{step.step}</span>
+              <strong>{step.text}</strong>
             </article>
           ))}
         </div>

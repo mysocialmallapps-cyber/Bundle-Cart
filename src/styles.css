@@ -466,16 +466,17 @@ input:focus {
   border-radius: 24px;
   padding: 38px;
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 24px;
-  align-items: stretch;
+  align-items: start;
   box-shadow: 0 20px 40px rgba(33, 24, 67, 0.08);
 }
 
 .marketing-hero-content {
   display: grid;
-  align-content: center;
-  gap: 16px;
+  align-content: start;
+  gap: 14px;
+  max-width: 560px;
 }
 
 .marketing-eyebrow {
@@ -489,18 +490,18 @@ input:focus {
 
 .marketing-hero h1 {
   margin: 0;
-  font-size: clamp(2rem, 4vw, 3.1rem);
-  line-height: 1.08;
+  font-size: clamp(2rem, 4vw, 2.9rem);
+  line-height: 1.1;
   color: #1f153d;
-  max-width: 16ch;
+  max-width: 14ch;
 }
 
 .marketing-subheadline {
   margin: 0;
   color: #4c4568;
-  font-size: 1.08rem;
-  line-height: 1.55;
-  max-width: 56ch;
+  font-size: 1rem;
+  line-height: 1.5;
+  max-width: 44ch;
 }
 
 .marketing-cta-row {
@@ -547,7 +548,7 @@ input:focus {
 .marketing-hero-note {
   margin: 0;
   color: #5d5676;
-  font-size: 0.9rem;
+  font-size: 0.88rem;
 }
 
 .marketing-quick-message {
@@ -560,6 +561,11 @@ input:focus {
   font-size: 0.92rem;
   font-weight: 700;
   width: fit-content;
+}
+
+.marketing-hero-image-card {
+  display: grid;
+  gap: 10px;
 }
 
 .marketing-preview-card {
@@ -588,7 +594,8 @@ input:focus {
 
 .marketing-simple-steps {
   display: grid;
-  gap: 8px;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .marketing-simple-steps article {
@@ -1353,6 +1360,9 @@ input:focus {
   }
   .marketing-hero {
     grid-template-columns: 1fr;
+  }
+  .marketing-hero-content {
+    max-width: none;
   }
   .marketing-header {
     padding: 10px 14px;
