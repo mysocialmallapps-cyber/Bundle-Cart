@@ -180,6 +180,31 @@ CREATE UNIQUE INDEX IF NOT EXISTS bundlecart_fee_events_group_order_uq
 ON bundlecart_fee_events (group_id, shopify_order_id);
 `;
 
+const BACKFILL_BUNDLECART_FEE_EVENTS_FROM_LINKED_ORDERS_SQL = `
+INSERT INTO bundlecart_fee_events (
+  group_id,
+  creator_shop_domain,
+  shopify_order_id,
+  order_name,
+  fee_amount,
+  created_at
+)
+SELECT
+  lo.group_id,
+  COALESCE(NULLIF(TRIM(lg.first_shop_domain), ''), NULLIF(TRIM(lo.shop_domain), '')) AS creator_shop_domain,
+  lo.shopify_order_id,
+  NULL::text AS order_name,
+  lo.bundlecart_fee_amount,
+  COALESCE(lo.created_at, NOW()) AS created_at
+FROM linked_orders lo
+JOIN link_groups lg ON lg.id = lo.group_id
+WHERE lo.group_id IS NOT NULL
+  AND lo.bundlecart_paid = TRUE
+  AND COALESCE(lo.bundlecart_fee_amount, 0) > 0
+  AND COALESCE(NULLIF(TRIM(lg.first_shop_domain), ''), NULLIF(TRIM(lo.shop_domain), '')) IS NOT NULL
+ON CONFLICT (group_id, shopify_order_id) DO NOTHING;
+`;
+
 const CREATE_BUNDLECART_BILLING_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS bundlecart_billing (
   id SERIAL PRIMARY KEY,
@@ -656,10 +681,27 @@ orders_in_bundles_created AS (
   WHERE LOWER(TRIM(COALESCE(lg.first_shop_domain, ''))) = ns.shop_domain
 ),
 fees_collected AS (
-  SELECT COALESCE(SUM(bfe.fee_amount), 0)::numeric AS value
-  FROM bundlecart_fee_events bfe
-  CROSS JOIN normalized_shop ns
-  WHERE LOWER(TRIM(COALESCE(bfe.creator_shop_domain, ''))) = ns.shop_domain
+  SELECT COALESCE(SUM(fee_rows.fee_amount), 0)::numeric AS value
+  FROM (
+    SELECT bfe.fee_amount
+    FROM bundlecart_fee_events bfe
+    CROSS JOIN normalized_shop ns
+    WHERE LOWER(TRIM(COALESCE(bfe.creator_shop_domain, ''))) = ns.shop_domain
+    UNION ALL
+    SELECT lo.bundlecart_fee_amount AS fee_amount
+    FROM linked_orders lo
+    JOIN link_groups lg ON lg.id = lo.group_id
+    CROSS JOIN normalized_shop ns
+    WHERE lo.bundlecart_paid = TRUE
+      AND COALESCE(lo.bundlecart_fee_amount, 0) > 0
+      AND LOWER(TRIM(COALESCE(lg.first_shop_domain, lo.shop_domain, ''))) = ns.shop_domain
+      AND NOT EXISTS (
+        SELECT 1
+        FROM bundlecart_fee_events bfe2
+        WHERE bfe2.group_id = lo.group_id
+          AND bfe2.shopify_order_id = lo.shopify_order_id
+      )
+  ) fee_rows
 )
 SELECT
   bc.value AS bundles_created,
@@ -4042,6 +4084,10 @@ export async function ensureBundlecartFeeEventsTableExists() {
   try {
     await dbPool.query(CREATE_BUNDLECART_FEE_EVENTS_TABLE_SQL);
     await dbPool.query(CREATE_BUNDLECART_FEE_EVENTS_UNIQUE_INDEX_SQL);
+    const backfillResult = await dbPool.query(BACKFILL_BUNDLECART_FEE_EVENTS_FROM_LINKED_ORDERS_SQL);
+    console.log("MIGRATION BACKFILL bundlecart_fee_events_from_linked_orders", {
+      insertedRows: Number(backfillResult?.rowCount || 0)
+    });
     console.log("MIGRATION DONE bundlecart_fee_events");
     console.log("DB SCHEMA OK bundlecart_fee_events");
   } catch (error) {
