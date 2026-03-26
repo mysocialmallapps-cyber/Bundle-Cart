@@ -234,10 +234,10 @@ export default function MarketingPage() {
         </div>
         <aside className="marketing-preview-card marketing-preview-media-card" aria-label="BundleCart product preview">
           <p className="marketing-preview-title">Watch BundleCart in action</p>
-          <div className="marketing-demo-media-shell">
+          <div className="marketing-hero-image-shell">
             <img
-              src="/bundlecart-hero.png"
-              className="marketing-demo-video"
+              src="/bundlecart-hero.png?v=2"
+              className="marketing-hero-image"
               alt="BundleCart live in Shopify checkout"
             />
           </div>
