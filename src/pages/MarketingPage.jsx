@@ -1,7 +1,6 @@
 import { useState } from "react";
 
 const SHOP_DOMAIN_SUFFIX = ".myshopify.com";
-const HERO_IMAGE_SOURCE = "/bundlecart-hero.png";
 
 function normalizeShopDomainInput(value) {
   const trimmed = String(value || "").trim().toLowerCase();
@@ -237,10 +236,9 @@ export default function MarketingPage() {
           <p className="marketing-preview-title">Watch BundleCart in action</p>
           <div className="marketing-demo-media-shell">
             <img
-              src={HERO_IMAGE_SOURCE}
+              src="/bundlecart-hero.png"
               className="marketing-demo-video"
-              alt="BundleCart live checkout preview"
-              loading="lazy"
+              alt="BundleCart live in Shopify checkout"
             />
           </div>
           <p className="marketing-preview-foot">
