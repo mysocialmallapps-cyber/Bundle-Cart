@@ -16,15 +16,21 @@ function isValidShopDomain(value) {
 const HOW_IT_WORKS_STEPS = [
   {
     step: "Step 1",
-    text: "Shop from any store"
+    title: "Shop from any store",
+    body: "Choose what you want to buy.",
+    icon: "🛍️"
   },
   {
     step: "Step 2",
-    text: "Pay shipping once ($5)"
+    title: "Pay shipping once ($5)",
+    body: "You only pay for shipping the first time.",
+    icon: "💳"
   },
   {
     step: "Step 3",
-    text: "Get 72hrs free shipping"
+    title: "Get 72hrs free shipping",
+    body: "Everything else ships free for 72 hours.",
+    icon: "📦"
   }
 ];
 
@@ -287,8 +293,10 @@ export default function MarketingPage() {
         <div className="marketing-how-steps">
           {HOW_IT_WORKS_STEPS.map((step) => (
             <article key={step.step} className="marketing-how-step">
+              <p className="marketing-how-step-icon">{step.icon}</p>
               <span>{step.step}</span>
-              <strong>{step.text}</strong>
+              <strong>{step.title}</strong>
+              <p>{step.body}</p>
             </article>
           ))}
         </div>
