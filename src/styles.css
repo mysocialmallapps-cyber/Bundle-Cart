@@ -604,11 +604,14 @@ input:focus {
   gap: 14px;
 }
 
-.marketing-hero-media-shell {
+.marketing-hero-container {
   width: 100%;
+  max-width: 520px;
+  margin: 0 auto;
   display: flex;
   justify-content: center;
   align-items: center;
+  box-sizing: border-box;
   border-radius: 14px;
   border: 1px solid #e7dcff;
   box-shadow: 0 14px 24px rgba(37, 25, 84, 0.14);
@@ -616,13 +619,14 @@ input:focus {
   padding: 14px;
 }
 
-.marketing-hero-media-image {
+.marketing-hero-image {
   width: 100%;
   height: auto;
   max-width: 500px;
   display: block;
   margin: 0 auto;
   object-fit: contain;
+  border-radius: 16px;
 }
 
 .marketing-trust-strip {
