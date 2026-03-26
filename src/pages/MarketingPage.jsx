@@ -234,7 +234,7 @@ export default function MarketingPage() {
         </div>
         <aside className="marketing-preview-card marketing-preview-media-card" aria-label="BundleCart product preview">
           <p className="marketing-preview-title">Watch BundleCart in action</p>
-          <div className="marketing-hero-image-shell">
+          <div className="marketing-hero-container">
             <img
               src="/bundlecart-hero.png?v=2"
               className="marketing-hero-image"
