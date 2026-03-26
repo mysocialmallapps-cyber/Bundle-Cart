@@ -623,6 +623,15 @@ input:focus {
   background: #100b20;
 }
 
+.marketing-hero-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  margin: 0 auto;
+  background: #f6f1ff;
+}
+
 .marketing-demo-overlay-play {
   position: absolute;
   inset: auto auto 12px 12px;
