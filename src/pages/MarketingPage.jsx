@@ -15,19 +15,22 @@ function isValidShopDomain(value) {
 
 const HOW_IT_WORKS_STEPS = [
   {
-    icon: "🛒",
-    title: "Customer chooses BundleCart at checkout",
-    body: "BundleCart appears as a shipping option. The first eligible order uses a fixed $5 BundleCart fee."
+    step: "Step 1",
+    title: "Shop from any store",
+    body: "Choose what you want to buy.",
+    icon: "🛍️"
   },
   {
-    icon: "⏱️",
-    title: "A 72-hour bundle window opens",
-    body: "The first order opens a window tied to the customer address, giving shoppers time to place additional orders."
+    step: "Step 2",
+    title: "Pay shipping once ($5)",
+    body: "You only pay for shipping the first time.",
+    icon: "💳"
   },
   {
-    icon: "📦",
-    title: "Additional orders ship with free BundleCart shipping",
-    body: "During the active window, customers can place more BundleCart orders across participating stores at $0 BundleCart shipping."
+    step: "Step 3",
+    title: "Get 72hrs free shipping",
+    body: "Everything else ships free for 72 hours.",
+    icon: "📦"
   }
 ];
 
@@ -206,11 +209,18 @@ export default function MarketingPage() {
       <section className="marketing-hero">
         <div className="marketing-hero-content">
           <div>
-            <p className="marketing-eyebrow">BundleCart for Shopify</p>
-            <h1>Pay shipping once. Turn one order into many.</h1>
+            <p className="marketing-eyebrow">BUNDLECART FOR SHOPIFY</p>
+            <h1>
+              Pay shipping once.
+              <br />
+              Everything else ships free.
+            </h1>
             <p className="marketing-subheadline">
-              BundleCart helps Shopify stores drive extra orders by letting customers open a 72-hour
-              shipping window and add more orders with free BundleCart shipping.
+              Buy from different stores.
+              <br />
+              Only pay shipping the first time.
+              <br />
+              Everything else ships free for 72 hours.
             </p>
           </div>
           <div className="marketing-cta-row">
@@ -230,10 +240,11 @@ export default function MarketingPage() {
               See how it works
             </a>
           </div>
-          <p className="marketing-hero-note">First month free • Built for Shopify • No fulfillment changes</p>
+          <p className="marketing-hero-note">First month free • Built for Shopify • No fulfilment changes</p>
+          <div className="marketing-hero-message-bar">BundleCart — Pay once. Ship everywhere.</div>
         </div>
         <aside className="marketing-preview-card marketing-preview-media-card" aria-label="BundleCart product preview">
-          <p className="marketing-preview-title">Watch BundleCart in action</p>
+          <p className="marketing-preview-title">See it in checkout</p>
           <div className="marketing-hero-container">
             <img
               src="/bundlecart-hero.png?v=2"
@@ -241,10 +252,9 @@ export default function MarketingPage() {
               alt="BundleCart live in Shopify checkout"
             />
           </div>
-          <p className="marketing-preview-foot">
-            See how customers open a 72-hour window and keep placing BundleCart orders.
-          </p>
-          <p className="marketing-preview-title">BundleCart performance snapshot</p>
+          <p className="marketing-preview-foot">Customers pay once, then keep ordering with free shipping.</p>
+          <p className="marketing-preview-title">Why stores use BundleCart</p>
+          <p className="marketing-preview-foot">More orders without more ads.</p>
           <div className="marketing-preview-grid">
             <article>
               <span>Bundles created</span>
@@ -279,13 +289,13 @@ export default function MarketingPage() {
       </section>
 
       <section id="how-it-works" className="marketing-section">
-        <h2>How BundleCart works</h2>
-        <div className="marketing-grid marketing-grid-3">
-          {HOW_IT_WORKS_STEPS.map((step, index) => (
-            <article key={step.title} className="marketing-step-card">
-              <p className="marketing-step-index">Step {index + 1}</p>
-              <p className="marketing-step-icon">{step.icon}</p>
-              <h3>{step.title}</h3>
+        <h2>How it works</h2>
+        <div className="marketing-how-steps">
+          {HOW_IT_WORKS_STEPS.map((step) => (
+            <article key={step.step} className="marketing-how-step">
+              <p className="marketing-how-step-icon">{step.icon}</p>
+              <span>{step.step}</span>
+              <strong>{step.title}</strong>
               <p>{step.body}</p>
             </article>
           ))}
