@@ -67,6 +67,8 @@ const EXPRESS_RATE = {
 };
 const BUNDLECART_EMAIL_WORKER_INTERVAL_MS = 10 * 60 * 1000;
 const BUNDLECART_EMAIL_WORKER_BATCH_LIMIT = 100;
+const BUNDLECART_EXPIRED_EMAIL_CLAIM_STALE_MINUTES = 30;
+let isBundleEmailBackfillActive = true;
 const SHOPIFY_BILLING_MODE = String(process.env.SHOPIFY_BILLING_MODE || "manual")
   .trim()
   .toLowerCase();
@@ -143,7 +145,9 @@ CREATE TABLE IF NOT EXISTS link_groups (
   customer_address_json JSONB,
   reminder_email_sent BOOLEAN DEFAULT FALSE,
   reminder_email_count INTEGER DEFAULT 0,
-  expired_email_sent BOOLEAN DEFAULT FALSE
+  expired_email_sent BOOLEAN DEFAULT FALSE,
+  expired_email_sent_at TIMESTAMP,
+  expired_email_claimed_at TIMESTAMP
 );
 `;
 
@@ -588,6 +592,8 @@ SELECT
   COALESCE(lg.reminder_email_count, 0) AS reminder_email_count,
   COALESCE(lg.reminder_email_sent, FALSE) AS reminder_email_sent,
   COALESCE(lg.expired_email_sent, FALSE) AS expired_email_sent,
+  lg.expired_email_sent_at,
+  lg.expired_email_claimed_at,
   COUNT(lo.id)::integer AS order_count
 FROM link_groups lg
 LEFT JOIN linked_orders lo
@@ -774,10 +780,35 @@ SET reminder_email_count = LEAST(COALESCE(reminder_email_count, 0) + 1, 2),
 WHERE id = $1::integer;
 `;
 
-const UPDATE_LINK_GROUP_EXPIRED_EMAIL_SENT_SQL = `
+const CLAIM_LINK_GROUP_EXPIRED_EMAIL_SEND_SQL = `
 UPDATE link_groups
-SET expired_email_sent = TRUE
-WHERE id = $1::integer;
+SET expired_email_claimed_at = NOW()
+WHERE id = $1::integer
+  AND active_until IS NOT NULL
+  AND active_until <= NOW()
+  AND COALESCE(expired_email_sent, FALSE) = FALSE
+  AND (
+    expired_email_claimed_at IS NULL
+    OR expired_email_claimed_at <= NOW() - ($2::integer * INTERVAL '1 minute')
+  )
+RETURNING id, email, active_until, expired_email_claimed_at;
+`;
+
+const FINALIZE_LINK_GROUP_EXPIRED_EMAIL_SENT_SQL = `
+UPDATE link_groups
+SET expired_email_sent = TRUE,
+    expired_email_sent_at = COALESCE(expired_email_sent_at, NOW()),
+    expired_email_claimed_at = COALESCE(expired_email_claimed_at, NOW())
+WHERE id = $1::integer
+  AND COALESCE(expired_email_sent, FALSE) = FALSE
+RETURNING id;
+`;
+
+const RELEASE_LINK_GROUP_EXPIRED_EMAIL_CLAIM_SQL = `
+UPDATE link_groups
+SET expired_email_claimed_at = NULL
+WHERE id = $1::integer
+  AND COALESCE(expired_email_sent, FALSE) = FALSE;
 `;
 
 const SELECT_LINK_GROUP_PUBLIC_TOKEN_SQL = `
@@ -909,6 +940,21 @@ WHERE reminder_email_sent IS NOT NULL OR reminder_email_count IS NOT NULL;
 
 const ALTER_LINK_GROUPS_ADD_EXPIRED_EMAIL_SENT_SQL = `
 ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS expired_email_sent BOOLEAN DEFAULT FALSE;
+`;
+
+const ALTER_LINK_GROUPS_ADD_EXPIRED_EMAIL_SENT_AT_SQL = `
+ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS expired_email_sent_at TIMESTAMP;
+`;
+
+const ALTER_LINK_GROUPS_ADD_EXPIRED_EMAIL_CLAIMED_AT_SQL = `
+ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS expired_email_claimed_at TIMESTAMP;
+`;
+
+const BACKFILL_LINK_GROUPS_EXPIRED_EMAIL_SENT_AT_SQL = `
+UPDATE link_groups
+SET expired_email_sent_at = COALESCE(expired_email_sent_at, NOW())
+WHERE COALESCE(expired_email_sent, FALSE) = TRUE
+  AND expired_email_sent_at IS NULL;
 `;
 
 const ALTER_LINK_GROUPS_ADD_BUNDLE_PUBLIC_TOKEN_SQL = `
@@ -1908,8 +1954,83 @@ async function getBundleNotificationSummary(bundleId) {
   if (!dbPool) {
     return null;
   }
-  const result = await dbPool.query(SELECT_BUNDLE_NOTIFICATION_SUMMARY_SQL, [bundleId]);
+  const result = await dbQueryWithRetry({
+    queryName: "bundle_notification_summary:select",
+    text: SELECT_BUNDLE_NOTIFICATION_SUMMARY_SQL,
+    values: [bundleId],
+    context: {
+      path: "bundle_email_notifications",
+      shopDomain: "",
+      orderId: ""
+    },
+    maxRetries: 1
+  });
   return result.rows[0] || null;
+}
+
+async function claimBundleExpiredEmailSend(bundleId, context = {}) {
+  if (!dbPool) {
+    return null;
+  }
+  const normalizedBundleId = Number(bundleId || 0);
+  if (!normalizedBundleId) {
+    return null;
+  }
+  const result = await dbQueryWithRetry({
+    queryName: "bundle_email_expired:claim",
+    text: CLAIM_LINK_GROUP_EXPIRED_EMAIL_SEND_SQL,
+    values: [normalizedBundleId, BUNDLECART_EXPIRED_EMAIL_CLAIM_STALE_MINUTES],
+    context: {
+      path: context.path || "bundle_email_worker",
+      shopDomain: String(context.shopDomain || ""),
+      orderId: String(context.orderId || "")
+    },
+    maxRetries: 1
+  });
+  return result.rows[0] || null;
+}
+
+async function finalizeBundleExpiredEmailSend(bundleId, context = {}) {
+  if (!dbPool) {
+    return false;
+  }
+  const normalizedBundleId = Number(bundleId || 0);
+  if (!normalizedBundleId) {
+    return false;
+  }
+  const result = await dbQueryWithRetry({
+    queryName: "bundle_email_expired:finalize",
+    text: FINALIZE_LINK_GROUP_EXPIRED_EMAIL_SENT_SQL,
+    values: [normalizedBundleId],
+    context: {
+      path: context.path || "bundle_email_worker",
+      shopDomain: String(context.shopDomain || ""),
+      orderId: String(context.orderId || "")
+    },
+    maxRetries: 1
+  });
+  return Number(result?.rowCount || 0) > 0;
+}
+
+async function releaseBundleExpiredEmailClaim(bundleId, context = {}) {
+  if (!dbPool) {
+    return;
+  }
+  const normalizedBundleId = Number(bundleId || 0);
+  if (!normalizedBundleId) {
+    return;
+  }
+  await dbQueryWithRetry({
+    queryName: "bundle_email_expired:release_claim",
+    text: RELEASE_LINK_GROUP_EXPIRED_EMAIL_CLAIM_SQL,
+    values: [normalizedBundleId],
+    context: {
+      path: context.path || "bundle_email_worker",
+      shopDomain: String(context.shopDomain || ""),
+      orderId: String(context.orderId || "")
+    },
+    maxRetries: 1
+  });
 }
 
 async function sendBundleStartedEmailNotification(bundleId, fallbackEmail, orderContext = {}) {
@@ -2272,6 +2393,14 @@ async function sendBundleExpiredEmail(bundle) {
 
   try {
     const summary = await getBundleNotificationSummary(bundleId);
+    if (!summary) {
+      console.log("Skipped duplicate email (already sent)", {
+        bundle_id: bundleId,
+        customer_email: String(bundle?.email || "").trim().toLowerCase(),
+        reason: "missing_bundle_summary_after_claim"
+      });
+      return false;
+    }
     const state = deriveBundleEmailState(summary);
     if (!state.isExpired) {
       console.log("BUNDLECART EMAIL SKIPPED", {
@@ -2351,25 +2480,100 @@ async function runBundleLifecycleEmailJobs() {
   if (!dbPool) {
     return;
   }
+  if (isBundleEmailBackfillActive) {
+    console.log("Skipped closed email during backfill", {
+      bundle_id: 0,
+      customer_email: "",
+      reason: "startup_backfill_active"
+    });
+    return;
+  }
 
   try {
-    const reminderBundlesResult = await dbPool.query(SELECT_BUNDLES_FOR_REMINDER_EMAIL_SQL, [
-      BUNDLECART_EMAIL_WORKER_BATCH_LIMIT
-    ]);
+    const reminderBundlesResult = await dbQueryWithRetry({
+      queryName: "bundle_email:select_reminder_candidates",
+      text: SELECT_BUNDLES_FOR_REMINDER_EMAIL_SQL,
+      values: [BUNDLECART_EMAIL_WORKER_BATCH_LIMIT],
+      context: {
+        path: "runBundleLifecycleEmailJobs",
+        shopDomain: "",
+        orderId: ""
+      },
+      maxRetries: 1
+    });
     for (const bundle of reminderBundlesResult.rows) {
       const sent = await sendBundleReminderEmail(bundle);
       if (sent) {
-        await dbPool.query(UPDATE_LINK_GROUP_REMINDER_EMAIL_SENT_SQL, [bundle.id]);
+        await dbQueryWithRetry({
+          queryName: "bundle_email:update_reminder_sent",
+          text: UPDATE_LINK_GROUP_REMINDER_EMAIL_SENT_SQL,
+          values: [bundle.id],
+          context: {
+            path: "runBundleLifecycleEmailJobs",
+            shopDomain: "",
+            orderId: ""
+          },
+          maxRetries: 1
+        });
       }
     }
 
-    const expiredBundlesResult = await dbPool.query(SELECT_BUNDLES_FOR_EXPIRED_EMAIL_SQL, [
-      BUNDLECART_EMAIL_WORKER_BATCH_LIMIT
-    ]);
+    const expiredBundlesResult = await dbQueryWithRetry({
+      queryName: "bundle_email:select_expired_candidates",
+      text: SELECT_BUNDLES_FOR_EXPIRED_EMAIL_SQL,
+      values: [BUNDLECART_EMAIL_WORKER_BATCH_LIMIT],
+      context: {
+        path: "runBundleLifecycleEmailJobs",
+        shopDomain: "",
+        orderId: ""
+      },
+      maxRetries: 1
+    });
     for (const bundle of expiredBundlesResult.rows) {
-      const sent = await sendBundleExpiredEmail(bundle);
-      if (sent) {
-        await dbPool.query(UPDATE_LINK_GROUP_EXPIRED_EMAIL_SENT_SQL, [bundle.id]);
+      const bundleId = Number(bundle?.id || 0);
+      const customerEmail = String(bundle?.email || "").trim().toLowerCase();
+      const claim = await claimBundleExpiredEmailSend(bundleId, {
+        path: "runBundleLifecycleEmailJobs",
+        shopDomain: "",
+        orderId: ""
+      });
+      if (!claim) {
+        console.log("Skipped duplicate email (already sent)", {
+          bundle_id: bundleId,
+          customer_email: customerEmail,
+          reason: "already_sent_or_claimed"
+        });
+        continue;
+      }
+
+      let sent = false;
+      try {
+        console.log("Sending bundle closed email", {
+          bundle_id: bundleId,
+          customer_email: customerEmail,
+          reason: "claim_acquired"
+        });
+        sent = await sendBundleExpiredEmail(bundle);
+        if (sent) {
+          await finalizeBundleExpiredEmailSend(bundleId, {
+            path: "runBundleLifecycleEmailJobs",
+            shopDomain: "",
+            orderId: ""
+          });
+        } else {
+          await releaseBundleExpiredEmailClaim(bundleId, {
+            path: "runBundleLifecycleEmailJobs",
+            shopDomain: "",
+            orderId: ""
+          });
+        }
+      } catch (error) {
+        await releaseBundleExpiredEmailClaim(bundleId, {
+          path: "runBundleLifecycleEmailJobs",
+          shopDomain: "",
+          orderId: ""
+        });
+        throw error;
       }
     }
   } catch (error) {
@@ -4012,9 +4216,15 @@ export async function ensureLinkingTablesExist() {
     await dbPool.query(ALTER_LINK_GROUPS_ADD_REMINDER_EMAIL_SENT_SQL);
     await dbPool.query(ALTER_LINK_GROUPS_ADD_REMINDER_EMAIL_COUNT_SQL);
     await dbPool.query(ALTER_LINK_GROUPS_ADD_EXPIRED_EMAIL_SENT_SQL);
+    await dbPool.query(ALTER_LINK_GROUPS_ADD_EXPIRED_EMAIL_SENT_AT_SQL);
+    await dbPool.query(ALTER_LINK_GROUPS_ADD_EXPIRED_EMAIL_CLAIMED_AT_SQL);
     await runNonCriticalSchemaQuery(
       BACKFILL_LINK_GROUPS_REMINDER_EMAIL_COUNT_SQL,
       "link_groups backfill reminder_email_count"
+    );
+    await runNonCriticalSchemaQuery(
+      BACKFILL_LINK_GROUPS_EXPIRED_EMAIL_SENT_AT_SQL,
+      "link_groups backfill expired_email_sent_at"
     );
     await dbPool.query(BACKFILL_LINK_GROUPS_FIRST_SHOP_DOMAIN_SQL);
     await dbPool.query(CREATE_LINK_GROUPS_BUNDLE_PUBLIC_TOKEN_UNIQUE_INDEX_SQL);
@@ -4046,6 +4256,8 @@ export async function ensureLinkingTablesExist() {
   } catch (error) {
     console.error("MIGRATION ERROR linked_orders", error);
   }
+
+  isBundleEmailBackfillActive = false;
 }
 
 export async function ensureBillingTablesExist() {
