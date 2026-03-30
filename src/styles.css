@@ -789,8 +789,22 @@ input:focus {
   background: linear-gradient(180deg, #ffffff 0%, #f8f5ff 100%);
   border: 1px solid #e8e2ff;
   border-radius: 16px;
-  padding: 16px;
+  padding: 0;
   box-shadow: 0 8px 18px rgba(31, 22, 61, 0.05);
+  display: grid;
+  gap: 0;
+  overflow: hidden;
+}
+
+.marketing-blog-card-image {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-bottom: 1px solid #ece3ff;
+}
+
+.marketing-blog-card-body {
+  padding: 16px;
   display: grid;
   gap: 10px;
 }
@@ -936,19 +950,32 @@ input:focus {
   border: 1px solid #e7ddff;
   border-radius: 18px;
   box-shadow: 0 12px 24px rgba(37, 25, 84, 0.08);
+  padding: 0;
+  display: grid;
+  overflow: hidden;
+}
+
+.blog-post-cover {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-bottom: 1px solid #ece3ff;
+}
+
+.blog-post-content-inner {
   padding: 22px;
   display: grid;
   gap: 12px;
 }
 
-.blog-post-content h1 {
+.blog-post-content-inner h1 {
   margin: 0;
   color: #241a44;
   font-size: clamp(1.8rem, 3.2vw, 2.4rem);
   line-height: 1.16;
 }
 
-.blog-post-content h2 {
+.blog-post-content-inner h2 {
   margin: 8px 0 2px;
   color: #2f2454;
   font-size: 1.25rem;
@@ -1955,6 +1982,9 @@ input:focus {
     justify-content: stretch;
   }
   .blog-article {
+    padding: 18px;
+  }
+  .blog-post-content-inner {
     padding: 18px;
   }
   .public-bundle-hero {

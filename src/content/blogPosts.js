@@ -68,6 +68,7 @@ const BLOG_POSTS = [
       "A short shipping window reduces pressure, encourages return visits, and helps customers buy more intentionally.",
     preview:
       "A short shipping window reduces pressure, encourages return visits, and helps customers buy more intentionally.",
+    image: "/blog-72h-window-cover.svg",
     sections: [
       {
         paragraphs: [
@@ -147,6 +148,7 @@ const BLOG_POSTS = [
       "Discounts can feel like savings, but they often push shoppers to spend more than they originally planned.",
     preview:
       "Discounts can feel like savings, but they often push shoppers to spend more than they originally planned.",
+    image: "/blog-discounts-cover.svg",
     sections: [
       {
         paragraphs: [

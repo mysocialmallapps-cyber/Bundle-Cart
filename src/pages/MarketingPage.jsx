@@ -439,6 +439,14 @@ export default function MarketingPage() {
         <div className="marketing-grid marketing-grid-3">
           {HOME_BLOG_PREVIEW_POSTS.map((post) => (
             <article key={post.slug} className="marketing-blog-card">
+              {post.image ? (
+                <img
+                  className="marketing-blog-card-image"
+                  src={post.image}
+                  alt={post.title}
+                  loading="lazy"
+                />
+              ) : null}
               <p className="marketing-blog-card-date">{post.dateLabel}</p>
               <h3>{post.title}</h3>
               <p>{post.excerpt}</p>

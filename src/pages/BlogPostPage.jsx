@@ -29,6 +29,14 @@ export default function BlogPostPage() {
           <p className="marketing-eyebrow">BLOG ARTICLE</p>
           <h1>{post.title}</h1>
           <p className="blog-article-meta">{formatBlogDate(post.date)}</p>
+          {post.image ? (
+            <img
+              className="blog-post-cover-image"
+              src={post.image}
+              alt={post.title}
+              loading="lazy"
+            />
+          ) : null}
 
           {post.sections.map((section, index) => (
             <section key={`${post.slug}-section-${index}`} className="blog-article-section">
