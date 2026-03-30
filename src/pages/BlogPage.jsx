@@ -23,7 +23,18 @@ export default function BlogPage() {
 
       <section className="blog-list" aria-label="Blog posts">
         {blogPosts.map((post) => (
-          <article key={post.slug} className="blog-card">
+          <article
+            key={post.slug}
+            className="blog-card"
+            onClick={() => {
+              trackEvent("blog_card_click", {
+                blogTitle: post.title,
+                blogSlug: post.slug,
+                sourcePage: "/blog",
+                path: "/blog"
+              });
+            }}
+          >
             {post.image ? (
               <img
                 className="blog-card-image"
@@ -41,9 +52,10 @@ export default function BlogPage() {
                 to={`/blog/${post.slug}`}
                 onClick={() => {
                   trackEvent("blog_card_click", {
-                    title: post.title,
-                    slug: post.slug,
-                    sourcePage: "/blog"
+                    blogTitle: post.title,
+                    blogSlug: post.slug,
+                    sourcePage: "/blog",
+                    path: "/blog"
                   });
                 }}
               >

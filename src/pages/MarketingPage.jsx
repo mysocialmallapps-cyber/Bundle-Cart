@@ -466,10 +466,17 @@ export default function MarketingPage() {
               <p className="marketing-blog-card-date">{post.dateLabel}</p>
               <h3>{post.title}</h3>
               <p>{post.excerpt}</p>
-              <Link className="marketing-blog-card-link" to={`/blog/${post.slug}`}>
-                {(() => {
-                  return null;
-                })()}
+              <Link
+                className="marketing-blog-card-link"
+                to={`/blog/${post.slug}`}
+                onClick={() => {
+                  trackEvent("blog_card_click", {
+                    blogTitle: post.title,
+                    blogSlug: post.slug,
+                    sourcePage: "/"
+                  });
+                }}
+              >
                 Read article
               </Link>
             </article>

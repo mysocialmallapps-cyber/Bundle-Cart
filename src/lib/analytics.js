@@ -51,6 +51,10 @@ export function trackEvent(eventName, payload = {}) {
     sessionId: getAnalyticsSessionId()
   };
 
+  if (typeof console !== "undefined") {
+    console.log("TRACK_EVENT_SENT", normalizedEvent, body.payload);
+  }
+
   const jsonBody = JSON.stringify(body);
 
   Promise.resolve()

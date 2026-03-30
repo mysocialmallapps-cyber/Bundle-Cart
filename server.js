@@ -76,13 +76,17 @@ const ANALYTICS_ALLOWED_PAYLOAD_FIELDS = new Set([
   "path",
   "referrer",
   "buttonLabel",
+  "buttonName",
+  "buttonLocation",
   "pagePath",
   "blogTitle",
   "blogSlug",
   "sourcePage",
   "destinationUrl",
+  "linkLabel",
   "sessionId",
-  "timestamp"
+  "timestamp",
+  "userAgent"
 ]);
 const BUNDLECART_EMAIL_WORKER_INTERVAL_MS = 10 * 60 * 1000;
 const BUNDLECART_EMAIL_WORKER_BATCH_LIMIT = 100;
