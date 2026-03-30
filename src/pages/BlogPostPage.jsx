@@ -1,9 +1,27 @@
+import { useEffect } from "react";
 import { Link, useParams } from "react-router-dom";
 import { formatBlogDate, getBlogPostBySlug } from "../content/blogPosts";
+import { trackEvent } from "../lib/analytics";
 
 export default function BlogPostPage() {
   const { slug = "" } = useParams();
   const post = getBlogPostBySlug(String(slug || "").trim());
+
+  useEffect(() => {
+    if (!post) {
+      return;
+    }
+    trackEvent("page_view", {
+      path: window.location.pathname,
+      referrer: document.referrer || "",
+      blogTitle: post.title,
+      blogSlug: post.slug
+    });
+    trackEvent("blog_post_view", {
+      blogTitle: post.title,
+      blogSlug: post.slug
+    });
+  }, [post]);
 
   if (!post) {
     return (
@@ -56,6 +74,18 @@ export default function BlogPostPage() {
             href="https://bundlecart.app"
             target="_blank"
             rel="noreferrer"
+            onClick={() => {
+              trackEvent("outbound_click", {
+                destinationUrl: "https://bundlecart.app",
+                linkLabel: "Explore BundleCart",
+                pagePath: window.location.pathname
+              });
+              trackEvent("cta_click", {
+                buttonLabel: "Explore BundleCart",
+                buttonLocation: "blog_post_footer",
+                pagePath: window.location.pathname
+              });
+            }}
           >
             Explore BundleCart
           </a>

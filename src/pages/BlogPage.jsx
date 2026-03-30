@@ -1,7 +1,15 @@
+import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { blogPosts } from "../content/blogPosts";
+import { trackEvent } from "../lib/analytics";
 
 export default function BlogPage() {
+  useEffect(() => {
+    trackEvent("page_view", {
+      path: "/blog"
+    });
+  }, []);
+
   return (
     <main className="blog-page" aria-labelledby="blog-page-title">
       <section className="blog-hero">
@@ -28,7 +36,17 @@ export default function BlogPage() {
               <p className="blog-card-date">{post.dateLabel}</p>
               <h2>{post.title}</h2>
               <p>{post.description}</p>
-              <Link className="marketing-btn marketing-btn-primary blog-card-link" to={`/blog/${post.slug}`}>
+              <Link
+                className="marketing-btn marketing-btn-primary blog-card-link"
+                to={`/blog/${post.slug}`}
+                onClick={() => {
+                  trackEvent("blog_card_click", {
+                    title: post.title,
+                    slug: post.slug,
+                    sourcePage: "/blog"
+                  });
+                }}
+              >
                 Read article
               </Link>
             </div>

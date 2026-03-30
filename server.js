@@ -65,6 +65,25 @@ const EXPRESS_RATE = {
   total_price: "1995",
   description: "Express shipping (1-2 business days)"
 };
+const ALLOWED_ANALYTICS_EVENTS = new Set([
+  "page_view",
+  "cta_click",
+  "blog_card_click",
+  "blog_post_view",
+  "outbound_click"
+]);
+const ANALYTICS_ALLOWED_PAYLOAD_FIELDS = new Set([
+  "path",
+  "referrer",
+  "buttonLabel",
+  "pagePath",
+  "blogTitle",
+  "blogSlug",
+  "sourcePage",
+  "destinationUrl",
+  "sessionId",
+  "timestamp"
+]);
 const BUNDLECART_EMAIL_WORKER_INTERVAL_MS = 10 * 60 * 1000;
 const BUNDLECART_EMAIL_WORKER_BATCH_LIMIT = 100;
 const BUNDLECART_EXPIRED_EMAIL_CLAIM_STALE_MINUTES = 30;

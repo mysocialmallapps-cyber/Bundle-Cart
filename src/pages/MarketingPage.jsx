@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { getLatestBlogPosts } from "../content/blogPosts";
+import { trackEvent } from "../lib/analytics";
 
 const SHOP_DOMAIN_SUFFIX = ".myshopify.com";
 
@@ -168,8 +169,16 @@ export default function MarketingPage() {
   const [isInstallModalOpen, setIsInstallModalOpen] = useState(false);
   const [shopDomainInput, setShopDomainInput] = useState("");
   const [installError, setInstallError] = useState("");
+  useEffect(() => {
+    trackEvent("page_view", { path: "/" });
+  }, []);
 
   function openInstallModal() {
+    trackEvent("cta_click", {
+      buttonName: "Install BundleCart",
+      buttonLabel: "Install BundleCart",
+      path: "/"
+    });
     setInstallError("");
     setIsInstallModalOpen(true);
   }
@@ -248,6 +257,13 @@ export default function MarketingPage() {
               className="marketing-btn marketing-btn-secondary"
               href="#how-it-works"
               title="See how it works"
+              onClick={() => {
+                trackEvent("cta_click", {
+                  buttonName: "See how it works",
+                  buttonLabel: "See how it works",
+                  path: "/"
+                });
+              }}
             >
               See how it works
             </a>
@@ -451,6 +467,9 @@ export default function MarketingPage() {
               <h3>{post.title}</h3>
               <p>{post.excerpt}</p>
               <Link className="marketing-blog-card-link" to={`/blog/${post.slug}`}>
+                {(() => {
+                  return null;
+                })()}
                 Read article
               </Link>
             </article>
