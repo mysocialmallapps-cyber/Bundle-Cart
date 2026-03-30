@@ -58,49 +58,170 @@ const BLOG_POSTS = [
     ]
   },
   {
-    slug: "how-72-hour-windows-change-shopping",
-    title: "How 72-Hour Windows Change Shopping Decisions",
+    slug: "how-72-hour-shopping-windows-change-buying-behavior",
+    title: "How 72-Hour Shopping Windows Change Buying Behavior",
     date: "2026-02-20",
+    metaTitle: "How 72-Hour Shopping Windows Change Buying Behavior",
+    metaDescription:
+      "Learn how a 72-hour shipping window reduces checkout pressure, encourages follow-up orders, and creates a better shopping experience.",
     description:
-      "Short shipping windows give customers a clear reason to come back and place follow-up orders quickly.",
+      "A short shipping window reduces pressure, encourages return visits, and helps customers buy more intentionally.",
     preview:
-      "A simple timer can change checkout behavior by turning one order into multiple smart follow-ups.",
+      "A short shipping window reduces pressure, encourages return visits, and helps customers buy more intentionally.",
     sections: [
       {
         paragraphs: [
-          "Most shoppers need a reason to return quickly.",
-          "A clear 72-hour shipping window gives that reason."
+          "Most online shopping decisions feel rushed.",
+          "You either buy everything now, or leave and risk paying shipping again later.",
+          "That pressure changes how people shop."
         ]
       },
       {
-        heading: "Why timing works",
+        heading: "The problem with traditional shipping",
         paragraphs: [
-          "When people know time is limited, they act faster.",
-          "That helps customers finish what they wanted to buy in one short window."
+          "Standard checkout logic often pushes people into one of two behaviors:",
+          "- Add more items just to make shipping feel worth it",
+          "- Abandon the cart and come back later, if at all",
+          "Both create friction.",
+          "Customers stop thinking about what they actually want to buy and start thinking about how to avoid paying for shipping twice."
+        ]
+      },
+      {
+        heading: "What a 72-hour window changes",
+        paragraphs: [
+          "A short shipping window changes the decision.",
+          "Instead of forcing one oversized order, it gives customers flexibility.",
+          "They can place one order now and still have time to come back and buy again without feeling penalized.",
+          "That changes the mindset from:",
+          '"I need to buy everything now"',
+          "to:",
+          '"I can buy what I need now and decide later."'
+        ]
+      },
+      {
+        heading: "Why this works",
+        paragraphs: [
+          "1. It reduces pressure",
+          "Customers no longer need to rush into a larger order just to justify shipping.",
+          "2. It encourages return visits",
+          "A defined window gives shoppers a reason to come back soon and complete another purchase.",
+          "3. It supports more intentional buying",
+          "Instead of reacting to a shipping threshold, customers can make smaller, more deliberate decisions."
+        ]
+      },
+      {
+        heading: "A better shopping experience",
+        paragraphs: [
+          "When shoppers feel less pressure, they tend to have a better checkout experience.",
+          "That means:",
+          "- less frustration",
+          "- fewer forced add-ons",
+          "- more flexibility across multiple purchases"
+        ]
+      },
+      {
+        heading: "Where BundleCart fits",
+        paragraphs: [
+          "BundleCart is built around this idea.",
+          "Pay shipping once, then unlock a 72-hour window to shop across stores without extra shipping pressure.",
+          "It's a simpler and more customer-friendly way to buy."
+        ]
+      },
+      {
+        heading: "Final thought",
+        paragraphs: [
+          "The best shopping experiences do not force bigger carts.",
+          "They make it easier to buy with confidence and come back when the timing is right."
         ]
       }
     ]
   },
   {
-    slug: "shop-smarter-without-chasing-coupons",
-    title: "Shop Smarter Without Chasing Coupons",
+    slug: "why-discounts-dont-actually-save-you-money",
+    title: "Why Discounts Don't Actually Save You Money",
     date: "2026-02-18",
+    metaTitle: "Why Discounts Don’t Actually Save You Money",
+    metaDescription:
+      "Discounts feel like savings, but they often increase total spend. Learn the difference between perceived savings and real savings.",
     description:
-      "Coupons can help, but better shipping strategy often saves more over multiple orders.",
+      "Discounts can feel like savings, but they often push shoppers to spend more than they originally planned.",
     preview:
-      "Instead of waiting for random coupon codes, use shipping timing to make every order count.",
+      "Discounts can feel like savings, but they often push shoppers to spend more than they originally planned.",
     sections: [
       {
         paragraphs: [
-          "Coupon hunting takes time and is not always reliable.",
-          "A better strategy is to plan when and how you place orders."
+          "Discounts feel smart.",
+          "A percentage off, a limited-time deal, or a promo code can make a purchase feel more justified.",
+          "But that does not always mean you are saving money."
         ]
       },
       {
-        heading: "Simple rule",
+        heading: "Why discounts work",
         paragraphs: [
-          "Pay shipping once, then use your free-shipping window wisely.",
-          "You get predictable savings without waiting for promo luck."
+          "Discounts are effective because they create urgency and make spending feel safer.",
+          'Instead of asking, "Do I need this?"',
+          'people start asking, "Should I buy this now before the deal disappears?"',
+          "That shift matters."
+        ]
+      },
+      {
+        heading: "The hidden cost of discounts",
+        paragraphs: [
+          "Imagine this:",
+          "- You planned to spend $25",
+          "- A discount encourages you to add more items",
+          "- Your final total becomes $60",
+          "You may have saved 20 percent on paper, but you still spent far more than you originally intended.",
+          "That is not always real savings."
+        ]
+      },
+      {
+        heading: "Perceived savings vs real savings",
+        paragraphs: [
+          "There is a big difference between these two ideas:",
+          "Perceived savings",
+          "You spend more, but feel better because the total looks reduced.",
+          "Real savings",
+          "You spend less overall because you only buy what you actually need.",
+          "The second one matters more."
+        ]
+      },
+      {
+        heading: "Why shoppers overspend",
+        paragraphs: [
+          "Discounts can trigger:",
+          "- urgency",
+          "- fear of missing out",
+          "- higher cart values",
+          "- more impulse buying",
+          "The result is often a bigger order, not a better one."
+        ]
+      },
+      {
+        heading: "A smarter approach",
+        paragraphs: [
+          "Before using a discount, ask:",
+          "- Would I buy this without the discount?",
+          "- Am I solving a real need or reacting to a deal?",
+          "- Is my total spend actually lower?",
+          "Those questions usually reveal the truth."
+        ]
+      },
+      {
+        heading: "Where BundleCart fits",
+        paragraphs: [
+          "BundleCart focuses on reducing friction instead of pushing bigger purchases.",
+          "Instead of needing a discount to feel good about checkout, customers can pay shipping once and unlock a 72-hour window across stores.",
+          "That means fewer pressure-based decisions and more intentional shopping."
+        ]
+      },
+      {
+        heading: "Final thought",
+        paragraphs: [
+          "Discounts are not always bad.",
+          "But they are not always savings either.",
+          "The smartest shoppers do not just look at what they saved on paper.",
+          "They look at what they actually spent."
         ]
       }
     ]
