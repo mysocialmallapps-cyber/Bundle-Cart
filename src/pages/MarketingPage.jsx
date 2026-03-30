@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
+import { getLatestBlogPosts } from "../content/blogPosts";
 
 const SHOP_DOMAIN_SUFFIX = ".myshopify.com";
 
@@ -160,6 +162,8 @@ const FAQ_ITEMS = [
   }
 ];
 
+const HOME_BLOG_PREVIEW_POSTS = getLatestBlogPosts(3);
+
 export default function MarketingPage() {
   const [isInstallModalOpen, setIsInstallModalOpen] = useState(false);
   const [shopDomainInput, setShopDomainInput] = useState("");
@@ -191,10 +195,18 @@ export default function MarketingPage() {
     <div className="marketing-page">
       <header className="marketing-header">
         <div className="marketing-header-inner">
-          <a href="/" className="marketing-logo" aria-label="BundleCart home">
+          <Link to="/" className="marketing-logo" aria-label="BundleCart home">
             <img src="/logo.png" alt="BundleCart" />
             <span>BundleCart</span>
-          </a>
+          </Link>
+          <nav className="marketing-main-nav" aria-label="Primary navigation">
+            <Link to="/" className="marketing-main-nav-link marketing-main-nav-link-active">
+              Home
+            </Link>
+            <Link to="/blog" className="marketing-main-nav-link">
+              Blog
+            </Link>
+          </nav>
           <button
             type="button"
             className="marketing-btn marketing-btn-primary marketing-cta"
@@ -417,6 +429,30 @@ export default function MarketingPage() {
         >
           Install BundleCart
         </a>
+      </section>
+
+      <section className="marketing-section marketing-blog-preview">
+        <div className="marketing-section-header">
+          <h2>Learn to Shop Smarter</h2>
+          <p>Quick reads on shipping psychology, smarter checkout decisions, and better online buying habits.</p>
+        </div>
+        <div className="marketing-grid marketing-grid-3">
+          {HOME_BLOG_PREVIEW_POSTS.map((post) => (
+            <article key={post.slug} className="marketing-blog-card">
+              <p className="marketing-blog-card-date">{post.dateLabel}</p>
+              <h3>{post.title}</h3>
+              <p>{post.excerpt}</p>
+              <Link className="marketing-blog-card-link" to={`/blog/${post.slug}`}>
+                Read article
+              </Link>
+            </article>
+          ))}
+        </div>
+        <div className="marketing-blog-preview-actions">
+          <Link to="/blog" className="marketing-btn marketing-btn-secondary">
+            View all
+          </Link>
+        </div>
       </section>
 
       {isInstallModalOpen ? (
