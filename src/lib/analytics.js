@@ -10,6 +10,8 @@ const ALLOWED_EVENTS = new Set([
 
 const SESSION_STORAGE_KEY = "bundlecart_session_id";
 const LANDING_VARIANT_SESSION_KEY = "bundlecart_landing_variant";
+const VALID_LANDING_VARIANTS = new Set(["control", "repeat_purchase_v1"]);
+const DEFAULT_LANDING_VARIANT = "control";
 
 function isBrowser() {
   return typeof window !== "undefined";
@@ -46,19 +48,26 @@ export function trackEvent(eventName, payload = {}) {
   }
 
   const normalizedPayload = payload && typeof payload === "object" ? { ...payload } : {};
-  if (!normalizedPayload.variant && isBrowser()) {
+  const payloadVariant = String(normalizedPayload.variant || "")
+    .trim()
+    .toLowerCase();
+  if (VALID_LANDING_VARIANTS.has(payloadVariant)) {
+    normalizedPayload.variant = payloadVariant;
+  } else if (isBrowser()) {
     try {
       const sessionVariant = String(
         window.sessionStorage.getItem(LANDING_VARIANT_SESSION_KEY) || ""
       )
         .trim()
         .toLowerCase();
-      if (sessionVariant) {
-        normalizedPayload.variant = sessionVariant;
-      }
+      normalizedPayload.variant = VALID_LANDING_VARIANTS.has(sessionVariant)
+        ? sessionVariant
+        : DEFAULT_LANDING_VARIANT;
     } catch {
-      // Ignore storage errors by design.
+      normalizedPayload.variant = DEFAULT_LANDING_VARIANT;
     }
+  } else {
+    normalizedPayload.variant = DEFAULT_LANDING_VARIANT;
   }
 
   const body = {

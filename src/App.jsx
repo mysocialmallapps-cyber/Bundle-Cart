@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { NavLink, Navigate, Route, Routes, useLocation, useSearchParams } from "react-router-dom";
 import BundlesPage from "./pages/BundlesPage";
 import AdminBundleDetailPage from "./pages/AdminBundleDetailPage";
@@ -11,10 +12,6 @@ import { resolveLandingVariant } from "./lib/landingVariant";
 export default function App() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
-  const landingVariant = resolveLandingVariant({
-    urlVariant: searchParams.get("variant"),
-    persistInSession: true
-  });
   const shop = String(searchParams.get("shop") || "")
     .trim()
     .toLowerCase();
@@ -30,6 +27,12 @@ export default function App() {
   }
   const isEmbeddedMerchantContext = Boolean(shop && (embedded || host || isIframe));
   const isEmbeddedRootDashboard = location.pathname === "/" && isEmbeddedMerchantContext;
+  const isHomepageMarketing = location.pathname === "/" && !isEmbeddedRootDashboard;
+  const landingVariant = resolveLandingVariant({
+    urlVariant: searchParams.get("variant"),
+    persistInSession: isHomepageMarketing,
+    pathname: location.pathname
+  });
   const isMerchantDashboard = location.pathname === "/dashboard" || isEmbeddedRootDashboard;
   const isPublicBundlePage =
     location.pathname === "/bundle" || location.pathname.startsWith("/bundle/");
@@ -38,6 +41,12 @@ export default function App() {
     location.pathname === "/marketing" || (location.pathname === "/" && !isEmbeddedRootDashboard);
   const navItems = [{ to: "/admin/bundles", label: "Bundles" }];
   const showAdminChrome = !isMerchantDashboard;
+
+  useEffect(() => {
+    if (isHomepageMarketing && typeof console !== "undefined") {
+      console.log("Landing variant:", landingVariant);
+    }
+  }, [isHomepageMarketing, landingVariant]);
 
   if (isPublicBundlePage || isMarketingPage || isBlogPage) {
     return (
