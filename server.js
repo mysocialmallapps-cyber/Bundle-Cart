@@ -70,7 +70,12 @@ const ALLOWED_ANALYTICS_EVENTS = new Set([
   "cta_click",
   "blog_card_click",
   "blog_post_view",
-  "outbound_click"
+  "outbound_click",
+  "landing_page_view",
+  "landing_cta_click",
+  "landing_secondary_cta_click",
+  "landing_install_click",
+  "landing_blog_card_click"
 ]);
 const ANALYTICS_ALLOWED_PAYLOAD_FIELDS = new Set([
   "path",
@@ -87,7 +92,9 @@ const ANALYTICS_ALLOWED_PAYLOAD_FIELDS = new Set([
   "variant",
   "sessionId",
   "timestamp",
-  "userAgent"
+  "userAgent",
+  "cta_label",
+  "section"
 ]);
 const BUNDLECART_EMAIL_WORKER_INTERVAL_MS = 10 * 60 * 1000;
 const BUNDLECART_EMAIL_WORKER_BATCH_LIMIT = 100;

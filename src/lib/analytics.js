@@ -5,7 +5,12 @@ const ALLOWED_EVENTS = new Set([
   "cta_click",
   "blog_card_click",
   "blog_post_view",
-  "outbound_click"
+  "outbound_click",
+  "landing_page_view",
+  "landing_cta_click",
+  "landing_secondary_cta_click",
+  "landing_install_click",
+  "landing_blog_card_click"
 ]);
 
 const SESSION_STORAGE_KEY = "bundlecart_session_id";
@@ -15,6 +20,52 @@ const DEFAULT_LANDING_VARIANT = "control";
 
 function isBrowser() {
   return typeof window !== "undefined";
+}
+
+function getCurrentPath() {
+  if (!isBrowser() || !window.location) {
+    return "";
+  }
+  return String(window.location.pathname || "").trim();
+}
+
+function getVariantFromUrl() {
+  if (!isBrowser() || !window.location) {
+    return "";
+  }
+  try {
+    const params = new URLSearchParams(window.location.search || "");
+    return String(params.get("variant") || "")
+      .trim()
+      .toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function getSessionLandingVariant() {
+  if (!isBrowser()) {
+    return "";
+  }
+  try {
+    return String(window.sessionStorage.getItem(LANDING_VARIANT_SESSION_KEY) || "")
+      .trim()
+      .toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+export function getActiveLandingVariant() {
+  const fromUrl = getVariantFromUrl();
+  if (VALID_LANDING_VARIANTS.has(fromUrl)) {
+    return fromUrl;
+  }
+  const fromSession = getSessionLandingVariant();
+  if (VALID_LANDING_VARIANTS.has(fromSession)) {
+    return fromSession;
+  }
+  return DEFAULT_LANDING_VARIANT;
 }
 
 function randomId() {
@@ -106,6 +157,23 @@ export function trackEvent(eventName, payload = {}) {
     });
 }
 
+export function trackLandingEvent(eventName, extraPayload = {}) {
+  const variant = getActiveLandingVariant();
+  const path = getCurrentPath();
+  const normalizedExtraPayload =
+    extraPayload && typeof extraPayload === "object" ? { ...extraPayload } : {};
+  const payload = {
+    ...normalizedExtraPayload,
+    path,
+    variant,
+    timestamp: new Date().toISOString()
+  };
+  if (typeof console !== "undefined") {
+    console.log("Tracked landing event", { eventName, variant, payload });
+  }
+  trackEvent(eventName, payload);
+}
+
 export function getAnalyticsReferrer() {
   if (!isBrowser() || typeof document === "undefined") {
     return "";
@@ -114,8 +182,5 @@ export function getAnalyticsReferrer() {
 }
 
 export function getAnalyticsPath() {
-  if (!isBrowser() || typeof window === "undefined" || !window.location) {
-    return "";
-  }
-  return String(window.location.pathname || "").trim();
+  return getCurrentPath();
 }

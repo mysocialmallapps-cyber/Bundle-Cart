@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { getLatestBlogPosts } from "../content/blogPosts";
-import { trackEvent } from "../lib/analytics";
+import { trackEvent, trackLandingEvent } from "../lib/analytics";
 
 const SHOP_DOMAIN_SUFFIX = ".myshopify.com";
 
@@ -350,8 +350,16 @@ export default function MarketingPage({ variant = "control" }) {
   const [installError, setInstallError] = useState("");
   const isRepeatPurchaseV1 = variant === "repeat_purchase_v1";
   const variantConfig = VARIANT_CONTENT[isRepeatPurchaseV1 ? "repeat_purchase_v1" : "control"];
+  function trackHomepageLandingEvent(eventName, extraPayload) {
+    if (typeof window !== "undefined" && window.location.pathname !== "/") {
+      return;
+    }
+    trackLandingEvent(eventName, extraPayload);
+  }
+
   useEffect(() => {
     trackEvent("page_view", { path: "/", variant });
+    trackHomepageLandingEvent("landing_page_view");
   }, [variant]);
 
   function openInstallModal() {
@@ -360,6 +368,10 @@ export default function MarketingPage({ variant = "control" }) {
       buttonLabel: "Install BundleCart",
       path: "/",
       variant
+    });
+    trackHomepageLandingEvent("landing_install_click", {
+      cta_label: "Install BundleCart",
+      section: "hero"
     });
     setInstallError("");
     setIsInstallModalOpen(true);
@@ -446,6 +458,10 @@ export default function MarketingPage({ variant = "control" }) {
                   buttonLabel: "See how it works",
                   path: "/",
                   variant
+                });
+                trackHomepageLandingEvent("landing_secondary_cta_click", {
+                  cta_label: "See how it works",
+                  section: "hero"
                 });
               }}
             >
@@ -705,6 +721,12 @@ export default function MarketingPage({ variant = "control" }) {
                     sourcePage: "/",
                     variant
                   });
+                  trackHomepageLandingEvent("landing_blog_card_click", {
+                    cta_label: "Read article",
+                    section: "home_blog_preview",
+                    blogTitle: post.title,
+                    blogSlug: post.slug
+                  });
                 }}
               >
                 Read article
@@ -713,7 +735,16 @@ export default function MarketingPage({ variant = "control" }) {
           ))}
         </div>
         <div className="marketing-blog-preview-actions">
-          <Link to="/blog" className="marketing-btn marketing-btn-secondary">
+          <Link
+            to="/blog"
+            className="marketing-btn marketing-btn-secondary"
+            onClick={() => {
+              trackHomepageLandingEvent("landing_cta_click", {
+                cta_label: "View all",
+                section: "home_blog_preview"
+              });
+            }}
+          >
             View all
           </Link>
         </div>
