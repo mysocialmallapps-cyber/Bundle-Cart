@@ -77,6 +77,14 @@ const ALLOWED_ANALYTICS_EVENTS = new Set([
   "landing_install_click",
   "landing_blog_card_click"
 ]);
+const LANDING_ANALYTICS_ALLOWED_EVENTS = new Set([
+  "landing_page_view",
+  "landing_cta_click",
+  "landing_secondary_cta_click",
+  "landing_install_click",
+  "landing_blog_card_click"
+]);
+const LANDING_ANALYTICS_ALLOWED_VARIANTS = new Set(["control", "repeat_purchase_v1"]);
 const ANALYTICS_ALLOWED_PAYLOAD_FIELDS = new Set([
   "path",
   "referrer",
@@ -290,6 +298,41 @@ CREATE TABLE IF NOT EXISTS merchant_billing_subscriptions (
 const CREATE_MERCHANT_BILLING_SUBSCRIPTIONS_SHOP_UNIQUE_INDEX_SQL = `
 CREATE UNIQUE INDEX IF NOT EXISTS merchant_billing_subscriptions_shop_domain_uq
 ON merchant_billing_subscriptions (shop_domain);
+`;
+
+const CREATE_LANDING_ANALYTICS_EVENTS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS landing_analytics_events (
+  id SERIAL PRIMARY KEY,
+  event_name TEXT NOT NULL,
+  variant TEXT NOT NULL,
+  path TEXT NOT NULL,
+  cta_label TEXT,
+  section TEXT,
+  session_id TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW(),
+  CONSTRAINT landing_analytics_variant_ck CHECK (variant IN ('control', 'repeat_purchase_v1'))
+);
+`;
+
+const CREATE_LANDING_ANALYTICS_EVENTS_INDEXES_SQL = `
+CREATE INDEX IF NOT EXISTS landing_analytics_events_variant_event_idx
+ON landing_analytics_events (variant, event_name);
+
+CREATE INDEX IF NOT EXISTS landing_analytics_events_session_id_idx
+ON landing_analytics_events (session_id);
+`;
+const INSERT_LANDING_ANALYTICS_EVENT_SQL = `
+INSERT INTO landing_analytics_events (
+  event_name,
+  variant,
+  path,
+  cta_label,
+  section,
+  session_id,
+  created_at
+)
+VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::timestamp, NOW()))
+RETURNING id;
 `;
 
 const CREATE_LINKED_ORDERS_UNIQUE_INDEX_SQL = `
@@ -1613,6 +1656,54 @@ function sanitizeAnalyticsPayload(rawPayload) {
     sanitized[key] = normalized.slice(0, 300);
   }
   return sanitized;
+}
+
+function sanitizeLandingAnalyticsPayload(rawPayload) {
+  if (!rawPayload || typeof rawPayload !== "object" || Array.isArray(rawPayload)) {
+    return null;
+  }
+
+  const eventName = String(rawPayload.event_name || "")
+    .trim()
+    .toLowerCase();
+  const variant = String(rawPayload.variant || "")
+    .trim()
+    .toLowerCase();
+  const path = String(rawPayload.path || "")
+    .trim()
+    .slice(0, 200);
+  const sessionId = String(rawPayload.session_id || "")
+    .trim()
+    .slice(0, 120);
+  const ctaLabel = String(rawPayload.cta_label || "")
+    .trim()
+    .slice(0, 200);
+  const section = String(rawPayload.section || "")
+    .trim()
+    .slice(0, 120);
+  const timestamp = String(rawPayload.timestamp || "")
+    .trim()
+    .slice(0, 80);
+
+  if (!LANDING_ANALYTICS_ALLOWED_EVENTS.has(eventName)) {
+    return null;
+  }
+  if (!LANDING_ANALYTICS_ALLOWED_VARIANTS.has(variant)) {
+    return null;
+  }
+  if (!path || !sessionId) {
+    return null;
+  }
+
+  return {
+    event_name: eventName,
+    variant,
+    path,
+    cta_label: ctaLabel || null,
+    section: section || null,
+    session_id: sessionId,
+    timestamp
+  };
 }
 
 async function ensureBundlePublicTokenForGroup(bundleId) {
@@ -4391,6 +4482,26 @@ export async function ensureMerchantBillingSubscriptionsTableExists() {
   }
 }
 
+export async function ensureLandingAnalyticsEventsTableExists() {
+  if (!dbPool) {
+    console.warn("DATABASE_URL not set; landing analytics persistence disabled.");
+    return;
+  }
+
+  console.log("MIGRATION START landing_analytics_events");
+  try {
+    await dbPool.query(CREATE_LANDING_ANALYTICS_EVENTS_TABLE_SQL);
+    await dbPool.query(CREATE_LANDING_ANALYTICS_EVENTS_INDEX_SQL);
+    console.log("MIGRATION DONE landing_analytics_events");
+    console.log("DB SCHEMA OK landing_analytics_events");
+  } catch (error) {
+    console.error("MIGRATION ERROR landing_analytics_events", error);
+    if (isFatalDbError(error)) {
+      throw error;
+    }
+  }
+}
+
 async function saveOrderCreateWebhookAsync({ shopDomain, webhookId, order, rawPayload }) {
   if (!dbPool) {
     return;
@@ -5887,6 +5998,59 @@ export function createApp() {
     }
   });
 
+  app.post("/api/analytics/landing", async (req, res) => {
+    try {
+      const sanitized = sanitizeLandingAnalyticsPayload(req.body);
+      if (!sanitized) {
+        res.status(200).json({ ok: true, ignored: "invalid_landing_payload" });
+        return;
+      }
+
+      if (!dbPool) {
+        console.warn("LANDING_ANALYTICS_DB_UNAVAILABLE", {
+          event_name: sanitized.event_name,
+          variant: sanitized.variant,
+          session_id: sanitized.session_id
+        });
+        res.status(200).json({ ok: true, stored: false });
+        return;
+      }
+
+      await dbQueryWithRetry({
+        queryName: "landing_analytics:insert",
+        text: INSERT_LANDING_ANALYTICS_EVENT_SQL,
+        values: [
+          sanitized.event_name,
+          sanitized.variant,
+          sanitized.path,
+          sanitized.cta_label,
+          sanitized.section,
+          sanitized.session_id,
+          sanitized.timestamp || null
+        ],
+        context: {
+          path: "/api/analytics/landing",
+          orderId: "",
+          shopDomain: ""
+        },
+        maxRetries: 1
+      });
+
+      console.log(
+        "Saved landing event",
+        sanitized.event_name,
+        sanitized.variant,
+        sanitized.session_id
+      );
+      res.status(200).json({ ok: true, stored: true });
+    } catch (error) {
+      console.error("LANDING_ANALYTICS_SAVE_ERROR", {
+        message: String(error?.message || error || "unknown_landing_analytics_error")
+      });
+      res.status(200).json({ ok: true, stored: false });
+    }
+  });
+
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true, time: new Date().toISOString() });
   });
@@ -6557,6 +6721,7 @@ if (isDirectRun && process.env.NODE_ENV !== "test") {
     .then(() => ensureBundlecartFeeEventsTableExists())
     .then(() => ensureBillingTablesExist())
     .then(() => ensureMerchantBillingSubscriptionsTableExists())
+    .then(() => ensureLandingAnalyticsEventsTableExists())
     .catch((error) => {
       console.error("Failed to ensure shopify_orders table", error?.message || error);
     })

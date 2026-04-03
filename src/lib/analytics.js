@@ -1,4 +1,5 @@
 const TRACK_ENDPOINT = "/api/track";
+const LANDING_TRACK_ENDPOINT = "/api/analytics/landing";
 
 const ALLOWED_EVENTS = new Set([
   "page_view",
@@ -80,12 +81,12 @@ export function getAnalyticsSessionId() {
     return "";
   }
   try {
-    const existing = String(window.localStorage.getItem(SESSION_STORAGE_KEY) || "").trim();
+    const existing = String(window.sessionStorage.getItem(SESSION_STORAGE_KEY) || "").trim();
     if (existing) {
       return existing;
     }
     const created = randomId();
-    window.localStorage.setItem(SESSION_STORAGE_KEY, created);
+    window.sessionStorage.setItem(SESSION_STORAGE_KEY, created);
     return created;
   } catch {
     return "";
@@ -160,17 +161,49 @@ export function trackEvent(eventName, payload = {}) {
 export function trackLandingEvent(eventName, extraPayload = {}) {
   const variant = getActiveLandingVariant();
   const path = getCurrentPath();
+  const sessionId = getAnalyticsSessionId();
   const normalizedExtraPayload =
     extraPayload && typeof extraPayload === "object" ? { ...extraPayload } : {};
   const payload = {
     ...normalizedExtraPayload,
     path,
     variant,
+    session_id: sessionId,
     timestamp: new Date().toISOString()
   };
   if (typeof console !== "undefined") {
-    console.log("Tracked landing event", { eventName, variant, payload });
+    console.log("Tracked landing event", { eventName, variant, session_id: sessionId, payload });
   }
+  const landingBody = JSON.stringify({
+    event_name: String(eventName || "").trim(),
+    variant,
+    path,
+    session_id: sessionId,
+    timestamp: payload.timestamp,
+    cta_label: String(payload.cta_label || "").trim(),
+    section: String(payload.section || "").trim()
+  });
+  Promise.resolve()
+    .then(() => {
+      if (isBrowser() && typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
+        const blob = new Blob([landingBody], { type: "application/json" });
+        const ok = navigator.sendBeacon(LANDING_TRACK_ENDPOINT, blob);
+        if (ok) {
+          return;
+        }
+      }
+      return fetch(LANDING_TRACK_ENDPOINT, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: landingBody,
+        keepalive: true
+      });
+    })
+    .catch(() => {
+      // Fail silently by design.
+    });
   trackEvent(eventName, payload);
 }
 
