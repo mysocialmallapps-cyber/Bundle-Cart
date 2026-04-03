@@ -16,7 +16,7 @@ function isValidShopDomain(value) {
   return normalized.endsWith(SHOP_DOMAIN_SUFFIX) && normalized.length > SHOP_DOMAIN_SUFFIX.length;
 }
 
-const HOW_IT_WORKS_STEPS = [
+const CONTROL_HOW_IT_WORKS_STEPS = [
   {
     step: "Step 1",
     title: "Shop from any store",
@@ -44,7 +44,7 @@ const TRUST_CHIPS = [
   "Cross-store order network"
 ];
 
-const MERCHANT_BENEFITS = [
+const CONTROL_MERCHANT_BENEFITS = [
   {
     icon: "📈",
     title: "Increase repeat purchases",
@@ -67,7 +67,7 @@ const MERCHANT_BENEFITS = [
   }
 ];
 
-const CUSTOMER_BENEFITS = [
+const CONTROL_CUSTOMER_BENEFITS = [
   {
     icon: "💸",
     title: "Pay shipping once",
@@ -90,7 +90,7 @@ const CUSTOMER_BENEFITS = [
   }
 ];
 
-const VALUE_BULLETS = [
+const CONTROL_VALUE_BULLETS = [
   {
     title: "Pay shipping once",
     body: "Simple customer value that drives action."
@@ -109,7 +109,7 @@ const VALUE_BULLETS = [
   }
 ];
 
-const ROI_METRICS = [
+const CONTROL_ROI_METRICS = [
   {
     label: "Bundles created",
     body: "How many first BundleCart orders your store starts."
@@ -136,7 +136,7 @@ const ROI_METRICS = [
   }
 ];
 
-const FAQ_ITEMS = [
+const CONTROL_FAQ_ITEMS = [
   {
     q: "Does BundleCart require a warehouse?",
     a: "No. Merchants keep shipping directly to customers using their normal fulfillment process."
@@ -163,12 +163,193 @@ const FAQ_ITEMS = [
   }
 ];
 
+const VARIANT_CONTENT = {
+  control: {
+    hero: {
+      eyebrow: "BUNDLECART FOR SHOPIFY",
+      title: "Pay shipping once.\nEverything else ships free.",
+      subtitle:
+        "Buy from different stores.\nOnly pay shipping the first time.\nEverything else ships free for 72 hours."
+    },
+    heroNote: "First month free • Built for Shopify • No fulfilment changes",
+    whyCustomersComeBack: null,
+    howItWorks: {
+      title: "How it works",
+      steps: CONTROL_HOW_IT_WORKS_STEPS,
+      support: ""
+    },
+    merchantSection: {
+      title: "Why merchants use BundleCart",
+      subtitle: "A growth layer that fits directly into existing Shopify operations.",
+      cards: CONTROL_MERCHANT_BENEFITS
+    },
+    customerSection: {
+      title: "Why customers use BundleCart",
+      subtitle: "Simple value: pay shipping once, keep shopping for 72 hours.",
+      cards: CONTROL_CUSTOMER_BENEFITS
+    },
+    networkSection: null,
+    valueProps: {
+      title: "Key value proposition",
+      cards: CONTROL_VALUE_BULLETS
+    },
+    roi: {
+      title: "Merchant ROI you can measure",
+      subtitle: "BundleCart gives stores performance metrics tied directly to repeat-purchase behavior.",
+      cards: CONTROL_ROI_METRICS
+    },
+    pricingSubtle:
+      "BundleCart is built for stores that want more repeat purchases, stronger retention, and cross-store network growth.",
+    pricingExtraLine: "",
+    faqItems: CONTROL_FAQ_ITEMS
+  },
+  repeat_purchase_v1: {
+    hero: {
+      eyebrow: "BUNDLECART FOR SHOPIFY",
+      title: "Turn 1 order into 2-3 orders (without more ads)",
+      subtitle:
+        "Once a customer pays shipping, they unlock free delivery for 72 hours - giving them a reason to come back and buy again immediately."
+    },
+    heroNote: "Built for Shopify stores. No fulfillment changes.",
+    whyCustomersComeBack: {
+      title: "Why customers actually come back",
+      body: [
+        "Customers don't normally reorder within 72 hours.",
+        "But once they've already paid shipping, every extra order feels cheaper.",
+        "So instead of waiting weeks, they buy again now."
+      ],
+      support:
+        "BundleCart creates a reason to come back immediately - instead of later, or never."
+    },
+    howItWorks: {
+      title: "How it works",
+      steps: [
+        {
+          step: "Step 1",
+          title: "Customer places first order",
+          body: "Pays shipping as normal.",
+          icon: "🛒"
+        },
+        {
+          step: "Step 2",
+          title: "Shipping unlocks a 72-hour window",
+          body: "Free shipping on additional orders during the active window.",
+          icon: "⏳"
+        },
+        {
+          step: "Step 3",
+          title: "Customer buys again",
+          body: "From your store or across the BundleCart network.",
+          icon: "🔁"
+        }
+      ],
+      support: "Most stores see 1-2 additional orders per customer in this window."
+    },
+    merchantSection: {
+      title: "Turn shipping into a repeat purchase engine",
+      subtitle: "Turn one checkout into follow-up orders without increasing ad spend.",
+      cards: [
+        {
+          icon: "📈",
+          title: "Increase repeat purchases",
+          body: "Give customers a reason to come back immediately."
+        },
+        {
+          icon: "🔁",
+          title: "Grow orders per customer",
+          body: "Turn one checkout into multiple follow-up orders."
+        },
+        {
+          icon: "🌐",
+          title: "Capture network demand",
+          body: "Receive orders from shoppers already inside active BundleCart windows."
+        },
+        {
+          icon: "✅",
+          title: "No fulfillment changes required",
+          body: "Keep your existing Shopify checkout and ship to customers as usual."
+        }
+      ]
+    },
+    customerSection: null,
+    networkSection: {
+      title: "Unlock cross-store revenue",
+      body: "A customer who already paid shipping on one participating store can order from other participating stores with free shipping during the same active window.",
+      support:
+        "This brings additional demand into your store without extra ad spend."
+    },
+    valueProps: null,
+    roi: {
+      title: "Real results from BundleCart stores",
+      subtitle: "Without increasing ad spend.",
+      cards: [
+        {
+          label: "Bundles created",
+          body: "How many BundleCart windows your store starts."
+        },
+        {
+          label: "Extra orders generated",
+          body: "Additional orders beyond the first qualifying order."
+        },
+        {
+          label: "Network orders",
+          body: "Orders received from active windows started elsewhere."
+        },
+        {
+          label: "Orders bundled",
+          body: "Total orders from your store participating in BundleCart windows."
+        },
+        {
+          label: "Average orders per bundle",
+          body: "How efficiently BundleCart turns one checkout into more checkouts."
+        },
+        {
+          label: "BundleCart fees collected",
+          body: "Qualifying first-order BundleCart fees tied to bundles your store starts."
+        }
+      ]
+    },
+    pricingSubtle:
+      "BundleCart is built for stores that want more repeat purchases, stronger retention, and cross-store network growth.",
+    pricingExtraLine:
+      "Only pay when BundleCart drives additional orders. No extra charge for linked free orders inside the same active window.",
+    faqItems: [
+      {
+        q: "Do customers actually reorder within 72 hours?",
+        a: "Yes. Once shipping is already paid, additional purchases feel cheaper and easier, which increases repeat orders inside a short window."
+      },
+      {
+        q: "What if my customers don't usually come back quickly?",
+        a: "That's exactly what BundleCart solves. It creates a reason to come back now instead of later."
+      },
+      {
+        q: "Does BundleCart require a warehouse?",
+        a: "No. Stores keep their normal Shopify fulfillment flow."
+      },
+      {
+        q: "Do merchants have to change how they fulfill orders?",
+        a: "No. BundleCart fits into existing Shopify operations."
+      },
+      {
+        q: "Can customers order from multiple stores?",
+        a: "Yes. If a customer is in an active BundleCart window, they can place eligible orders from participating stores with free shipping during that window."
+      },
+      {
+        q: "How does merchant billing work?",
+        a: "Merchants pay $50/month (first month free) plus $5 usage for qualifying first bundle orders. Linked free orders in the same active window are not billed again."
+      }
+    ]
+  }
+};
+
 const HOME_BLOG_PREVIEW_POSTS = getLatestBlogPosts(3);
 
 export default function MarketingPage({ variant = "control" }) {
   const [isInstallModalOpen, setIsInstallModalOpen] = useState(false);
   const [shopDomainInput, setShopDomainInput] = useState("");
   const [installError, setInstallError] = useState("");
+  const isRepeatPurchaseV1 = variant === "repeat_purchase_v1";
+  const variantConfig = VARIANT_CONTENT[isRepeatPurchaseV1 ? "repeat_purchase_v1" : "control"];
   useEffect(() => {
     trackEvent("page_view", { path: "/", variant });
   }, [variant]);
@@ -201,6 +382,17 @@ export default function MarketingPage({ variant = "control" }) {
     }
   }
 
+  function renderMultilineText(textValue) {
+    return String(textValue || "")
+      .split("\n")
+      .map((line, index, lines) => (
+        <span key={`${line}-${index}`}>
+          {line}
+          {index < lines.length - 1 ? <br /> : null}
+        </span>
+      ));
+  }
+
   return (
     <div className="marketing-page">
       <header className="marketing-header">
@@ -231,19 +423,9 @@ export default function MarketingPage({ variant = "control" }) {
       <section className="marketing-hero">
         <div className="marketing-hero-content">
           <div>
-            <p className="marketing-eyebrow">BUNDLECART FOR SHOPIFY</p>
-            <h1>
-              Pay shipping once.
-              <br />
-              Everything else ships free.
-            </h1>
-            <p className="marketing-subheadline">
-              Buy from different stores.
-              <br />
-              Only pay shipping the first time.
-              <br />
-              Everything else ships free for 72 hours.
-            </p>
+            <p className="marketing-eyebrow">{variantConfig.hero.eyebrow}</p>
+            <h1>{renderMultilineText(variantConfig.hero.title)}</h1>
+            <p className="marketing-subheadline">{renderMultilineText(variantConfig.hero.subtitle)}</p>
           </div>
           <div className="marketing-cta-row">
             <button
@@ -270,7 +452,7 @@ export default function MarketingPage({ variant = "control" }) {
               See how it works
             </a>
           </div>
-          <p className="marketing-hero-note">First month free • Built for Shopify • No fulfilment changes</p>
+          <p className="marketing-hero-note">{variantConfig.heroNote}</p>
           <div className="marketing-hero-message-bar">BundleCart — Pay once. Ship everywhere.</div>
         </div>
         <aside className="marketing-preview-card marketing-preview-media-card" aria-label="BundleCart product preview">
@@ -310,6 +492,20 @@ export default function MarketingPage({ variant = "control" }) {
         </aside>
       </section>
 
+      {variantConfig.whyCustomersComeBack ? (
+        <section className="marketing-section marketing-section-tinted">
+          <div className="marketing-section-header">
+            <h2>{variantConfig.whyCustomersComeBack.title}</h2>
+          </div>
+          <div className="marketing-grid">
+            {variantConfig.whyCustomersComeBack.body.map((line) => (
+              <p key={line}>{line}</p>
+            ))}
+            <p className="subtle">{variantConfig.whyCustomersComeBack.support}</p>
+          </div>
+        </section>
+      ) : null}
+
       <section className="marketing-trust-strip">
         {TRUST_CHIPS.map((chip) => (
           <article key={chip} className="marketing-trust-chip">
@@ -319,9 +515,9 @@ export default function MarketingPage({ variant = "control" }) {
       </section>
 
       <section id="how-it-works" className="marketing-section">
-        <h2>How it works</h2>
+        <h2>{variantConfig.howItWorks.title}</h2>
         <div className="marketing-how-steps">
-          {HOW_IT_WORKS_STEPS.map((step) => (
+          {variantConfig.howItWorks.steps.map((step) => (
             <article key={step.step} className="marketing-how-step">
               <p className="marketing-how-step-icon">{step.icon}</p>
               <span>{step.step}</span>
@@ -330,15 +526,18 @@ export default function MarketingPage({ variant = "control" }) {
             </article>
           ))}
         </div>
+        {variantConfig.howItWorks.support ? (
+          <p className="marketing-preview-foot">{variantConfig.howItWorks.support}</p>
+        ) : null}
       </section>
 
       <section className="marketing-section">
         <div className="marketing-section-header">
-          <h2>Why merchants use BundleCart</h2>
-          <p>A growth layer that fits directly into existing Shopify operations.</p>
+          <h2>{variantConfig.merchantSection.title}</h2>
+          <p>{variantConfig.merchantSection.subtitle}</p>
         </div>
         <div className="marketing-grid marketing-grid-2">
-          {MERCHANT_BENEFITS.map((benefit) => (
+          {variantConfig.merchantSection.cards.map((benefit) => (
             <article key={benefit.title} className="marketing-benefit-card">
               <p className="marketing-benefit-icon">{benefit.icon}</p>
               <h3>{benefit.title}</h3>
@@ -348,42 +547,56 @@ export default function MarketingPage({ variant = "control" }) {
         </div>
       </section>
 
-      <section className="marketing-section marketing-section-tinted">
-        <div className="marketing-section-header">
-          <h2>Why customers use BundleCart</h2>
-          <p>Simple value: pay shipping once, keep shopping for 72 hours.</p>
-        </div>
-        <div className="marketing-grid marketing-grid-2">
-          {CUSTOMER_BENEFITS.map((benefit) => (
-            <article key={benefit.title} className="marketing-benefit-card">
-              <p className="marketing-benefit-icon">{benefit.icon}</p>
-              <h3>{benefit.title}</h3>
-              <p>{benefit.body}</p>
-            </article>
-          ))}
-        </div>
-      </section>
+      {variantConfig.customerSection ? (
+        <section className="marketing-section marketing-section-tinted">
+          <div className="marketing-section-header">
+            <h2>{variantConfig.customerSection.title}</h2>
+            <p>{variantConfig.customerSection.subtitle}</p>
+          </div>
+          <div className="marketing-grid marketing-grid-2">
+            {variantConfig.customerSection.cards.map((benefit) => (
+              <article key={benefit.title} className="marketing-benefit-card">
+                <p className="marketing-benefit-icon">{benefit.icon}</p>
+                <h3>{benefit.title}</h3>
+                <p>{benefit.body}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {variantConfig.networkSection ? (
+        <section className="marketing-section marketing-section-tinted">
+          <div className="marketing-section-header">
+            <h2>{variantConfig.networkSection.title}</h2>
+            <p>{variantConfig.networkSection.body}</p>
+          </div>
+          <p>{variantConfig.networkSection.support}</p>
+        </section>
+      ) : null}
+
+      {variantConfig.valueProps ? (
+        <section className="marketing-section">
+          <h2>{variantConfig.valueProps.title}</h2>
+          <div className="marketing-grid marketing-grid-4">
+            {variantConfig.valueProps.cards.map((value) => (
+              <article key={value.title} className="marketing-feature-card">
+                <h3>{value.title}</h3>
+                <p>{value.body}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <section className="marketing-section">
-        <h2>Key value proposition</h2>
-        <div className="marketing-grid marketing-grid-4">
-          {VALUE_BULLETS.map((value) => (
-            <article key={value.title} className="marketing-feature-card">
-              <h3>{value.title}</h3>
-              <p>{value.body}</p>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section className="marketing-section">
         <div className="marketing-section-header">
-          <h2>Merchant ROI you can measure</h2>
-          <p>BundleCart gives stores performance metrics tied directly to repeat-purchase behavior.</p>
+          <h2>{variantConfig.roi.title}</h2>
+          <p>{variantConfig.roi.subtitle}</p>
         </div>
         <div className="marketing-roi-panel">
           <div className="marketing-grid marketing-grid-3">
-            {ROI_METRICS.map((metric) => (
+            {variantConfig.roi.cards.map((metric) => (
               <article key={metric.label} className="marketing-roi-card">
                 <h3>{metric.label}</h3>
                 <p>{metric.body}</p>
@@ -404,9 +617,9 @@ export default function MarketingPage({ variant = "control" }) {
             <li>Includes merchant performance dashboard metrics</li>
           </ul>
           <p className="subtle">
-            BundleCart is built for stores that want more repeat purchases, stronger retention, and
-            cross-store network growth.
+            {variantConfig.pricingSubtle}
           </p>
+          {variantConfig.pricingExtraLine ? <p className="subtle">{variantConfig.pricingExtraLine}</p> : null}
           <a
             className="marketing-btn marketing-btn-primary"
             href="#"
@@ -424,8 +637,22 @@ export default function MarketingPage({ variant = "control" }) {
       <section className="marketing-section">
         <h2>Frequently asked questions</h2>
         <div className="marketing-faq-list">
-          {FAQ_ITEMS.map((item) => (
-            <details key={item.q} className="marketing-faq-item">
+          {variantConfig.faqItems.map((item) => (
+            <details
+              key={item.q}
+              className="marketing-faq-item"
+              onToggle={(event) => {
+                if (event.currentTarget.open) {
+                  trackEvent("cta_click", {
+                    buttonName: "FAQ",
+                    buttonLabel: item.q,
+                    buttonLocation: "faq",
+                    path: "/",
+                    variant
+                  });
+                }
+              }}
+            >
               <summary>{item.q}</summary>
               <p>{item.a}</p>
             </details>
