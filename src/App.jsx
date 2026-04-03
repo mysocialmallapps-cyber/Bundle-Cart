@@ -1,9 +1,13 @@
+import { useEffect } from "react";
 import { NavLink, Navigate, Route, Routes, useLocation, useSearchParams } from "react-router-dom";
 import BundlesPage from "./pages/BundlesPage";
 import AdminBundleDetailPage from "./pages/AdminBundleDetailPage";
 import MerchantDashboardPage from "./pages/MerchantDashboardPage";
 import PublicBundlePage from "./pages/PublicBundlePage";
 import MarketingPage from "./pages/MarketingPage";
+import BlogPage from "./pages/BlogPage";
+import BlogPostPage from "./pages/BlogPostPage";
+import { resolveLandingVariant } from "./lib/landingVariant";
 
 export default function App() {
   const location = useLocation();
@@ -23,20 +27,44 @@ export default function App() {
   }
   const isEmbeddedMerchantContext = Boolean(shop && (embedded || host || isIframe));
   const isEmbeddedRootDashboard = location.pathname === "/" && isEmbeddedMerchantContext;
+  const isHomepageMarketing = location.pathname === "/" && !isEmbeddedRootDashboard;
+  const landingVariant = resolveLandingVariant({
+    urlVariant: searchParams.get("variant"),
+    persistInSession: isHomepageMarketing,
+    pathname: location.pathname
+  });
   const isMerchantDashboard = location.pathname === "/dashboard" || isEmbeddedRootDashboard;
   const isPublicBundlePage =
     location.pathname === "/bundle" || location.pathname.startsWith("/bundle/");
+  const isBlogPage = location.pathname === "/blog" || location.pathname.startsWith("/blog/");
   const isMarketingPage =
     location.pathname === "/marketing" || (location.pathname === "/" && !isEmbeddedRootDashboard);
   const navItems = [{ to: "/admin/bundles", label: "Bundles" }];
   const showAdminChrome = !isMerchantDashboard;
 
-  if (isPublicBundlePage || isMarketingPage) {
+  useEffect(() => {
+    if (isHomepageMarketing && typeof console !== "undefined") {
+      console.log("Landing variant:", landingVariant);
+    }
+  }, [isHomepageMarketing, landingVariant]);
+
+  if (isPublicBundlePage || isMarketingPage || isBlogPage) {
     return (
       <main className="main">
         <section className="page-content">
           <Routes>
-            <Route path="/" element={<MarketingPage />} />
+            <Route
+              path="/"
+              element={
+                landingVariant === "repeat_purchase_v1" ? (
+                  <MarketingPage variant="repeat_purchase_v1" />
+                ) : (
+                  <MarketingPage variant="control" />
+                )
+              }
+            />
+            <Route path="/blog" element={<BlogPage />} />
+            <Route path="/blog/:slug" element={<BlogPostPage />} />
             <Route path="/bundle" element={<PublicBundlePage />} />
             <Route path="/bundle/:token" element={<PublicBundlePage />} />
             <Route path="/marketing" element={<MarketingPage />} />

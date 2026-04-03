@@ -65,8 +65,49 @@ const EXPRESS_RATE = {
   total_price: "1995",
   description: "Express shipping (1-2 business days)"
 };
+const ALLOWED_ANALYTICS_EVENTS = new Set([
+  "page_view",
+  "cta_click",
+  "blog_card_click",
+  "blog_post_view",
+  "outbound_click",
+  "landing_page_view",
+  "landing_cta_click",
+  "landing_secondary_cta_click",
+  "landing_install_click",
+  "landing_blog_card_click"
+]);
+const LANDING_ANALYTICS_ALLOWED_EVENTS = new Set([
+  "landing_page_view",
+  "landing_cta_click",
+  "landing_secondary_cta_click",
+  "landing_install_click",
+  "landing_blog_card_click"
+]);
+const LANDING_ANALYTICS_ALLOWED_VARIANTS = new Set(["control", "repeat_purchase_v1"]);
+const ANALYTICS_ALLOWED_PAYLOAD_FIELDS = new Set([
+  "path",
+  "referrer",
+  "buttonLabel",
+  "buttonName",
+  "buttonLocation",
+  "pagePath",
+  "blogTitle",
+  "blogSlug",
+  "sourcePage",
+  "destinationUrl",
+  "linkLabel",
+  "variant",
+  "sessionId",
+  "timestamp",
+  "userAgent",
+  "cta_label",
+  "section"
+]);
 const BUNDLECART_EMAIL_WORKER_INTERVAL_MS = 10 * 60 * 1000;
 const BUNDLECART_EMAIL_WORKER_BATCH_LIMIT = 100;
+const BUNDLECART_EXPIRED_EMAIL_CLAIM_STALE_MINUTES = 30;
+let isBundleEmailBackfillActive = true;
 const SHOPIFY_BILLING_MODE = String(process.env.SHOPIFY_BILLING_MODE || "manual")
   .trim()
   .toLowerCase();
@@ -143,7 +184,9 @@ CREATE TABLE IF NOT EXISTS link_groups (
   customer_address_json JSONB,
   reminder_email_sent BOOLEAN DEFAULT FALSE,
   reminder_email_count INTEGER DEFAULT 0,
-  expired_email_sent BOOLEAN DEFAULT FALSE
+  expired_email_sent BOOLEAN DEFAULT FALSE,
+  expired_email_sent_at TIMESTAMP,
+  expired_email_claimed_at TIMESTAMP
 );
 `;
 
@@ -178,6 +221,31 @@ CREATE TABLE IF NOT EXISTS bundlecart_fee_events (
 const CREATE_BUNDLECART_FEE_EVENTS_UNIQUE_INDEX_SQL = `
 CREATE UNIQUE INDEX IF NOT EXISTS bundlecart_fee_events_group_order_uq
 ON bundlecart_fee_events (group_id, shopify_order_id);
+`;
+
+const BACKFILL_BUNDLECART_FEE_EVENTS_FROM_LINKED_ORDERS_SQL = `
+INSERT INTO bundlecart_fee_events (
+  group_id,
+  creator_shop_domain,
+  shopify_order_id,
+  order_name,
+  fee_amount,
+  created_at
+)
+SELECT
+  lo.group_id,
+  COALESCE(NULLIF(TRIM(lg.first_shop_domain), ''), NULLIF(TRIM(lo.shop_domain), '')) AS creator_shop_domain,
+  lo.shopify_order_id,
+  NULL::text AS order_name,
+  lo.bundlecart_fee_amount,
+  COALESCE(lo.created_at, NOW()) AS created_at
+FROM linked_orders lo
+JOIN link_groups lg ON lg.id = lo.group_id
+WHERE lo.group_id IS NOT NULL
+  AND lo.bundlecart_paid = TRUE
+  AND COALESCE(lo.bundlecart_fee_amount, 0) > 0
+  AND COALESCE(NULLIF(TRIM(lg.first_shop_domain), ''), NULLIF(TRIM(lo.shop_domain), '')) IS NOT NULL
+ON CONFLICT (group_id, shopify_order_id) DO NOTHING;
 `;
 
 const CREATE_BUNDLECART_BILLING_TABLE_SQL = `
@@ -230,6 +298,41 @@ CREATE TABLE IF NOT EXISTS merchant_billing_subscriptions (
 const CREATE_MERCHANT_BILLING_SUBSCRIPTIONS_SHOP_UNIQUE_INDEX_SQL = `
 CREATE UNIQUE INDEX IF NOT EXISTS merchant_billing_subscriptions_shop_domain_uq
 ON merchant_billing_subscriptions (shop_domain);
+`;
+
+const CREATE_LANDING_ANALYTICS_EVENTS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS landing_analytics_events (
+  id SERIAL PRIMARY KEY,
+  event_name TEXT NOT NULL,
+  variant TEXT NOT NULL,
+  path TEXT NOT NULL,
+  cta_label TEXT,
+  section TEXT,
+  session_id TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW(),
+  CONSTRAINT landing_analytics_variant_ck CHECK (variant IN ('control', 'repeat_purchase_v1'))
+);
+`;
+
+const CREATE_LANDING_ANALYTICS_EVENTS_INDEXES_SQL = `
+CREATE INDEX IF NOT EXISTS landing_analytics_events_variant_event_idx
+ON landing_analytics_events (variant, event_name);
+
+CREATE INDEX IF NOT EXISTS landing_analytics_events_session_id_idx
+ON landing_analytics_events (session_id);
+`;
+const INSERT_LANDING_ANALYTICS_EVENT_SQL = `
+INSERT INTO landing_analytics_events (
+  event_name,
+  variant,
+  path,
+  cta_label,
+  section,
+  session_id,
+  created_at
+)
+VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::timestamp, NOW()))
+RETURNING id;
 `;
 
 const CREATE_LINKED_ORDERS_UNIQUE_INDEX_SQL = `
@@ -563,6 +666,8 @@ SELECT
   COALESCE(lg.reminder_email_count, 0) AS reminder_email_count,
   COALESCE(lg.reminder_email_sent, FALSE) AS reminder_email_sent,
   COALESCE(lg.expired_email_sent, FALSE) AS expired_email_sent,
+  lg.expired_email_sent_at,
+  lg.expired_email_claimed_at,
   COUNT(lo.id)::integer AS order_count
 FROM link_groups lg
 LEFT JOIN linked_orders lo
@@ -656,10 +761,27 @@ orders_in_bundles_created AS (
   WHERE LOWER(TRIM(COALESCE(lg.first_shop_domain, ''))) = ns.shop_domain
 ),
 fees_collected AS (
-  SELECT COALESCE(SUM(bfe.fee_amount), 0)::numeric AS value
-  FROM bundlecart_fee_events bfe
-  CROSS JOIN normalized_shop ns
-  WHERE LOWER(TRIM(COALESCE(bfe.creator_shop_domain, ''))) = ns.shop_domain
+  SELECT COALESCE(SUM(fee_rows.fee_amount), 0)::numeric AS value
+  FROM (
+    SELECT bfe.fee_amount
+    FROM bundlecart_fee_events bfe
+    CROSS JOIN normalized_shop ns
+    WHERE LOWER(TRIM(COALESCE(bfe.creator_shop_domain, ''))) = ns.shop_domain
+    UNION ALL
+    SELECT lo.bundlecart_fee_amount AS fee_amount
+    FROM linked_orders lo
+    JOIN link_groups lg ON lg.id = lo.group_id
+    CROSS JOIN normalized_shop ns
+    WHERE lo.bundlecart_paid = TRUE
+      AND COALESCE(lo.bundlecart_fee_amount, 0) > 0
+      AND LOWER(TRIM(COALESCE(lg.first_shop_domain, lo.shop_domain, ''))) = ns.shop_domain
+      AND NOT EXISTS (
+        SELECT 1
+        FROM bundlecart_fee_events bfe2
+        WHERE bfe2.group_id = lo.group_id
+          AND bfe2.shopify_order_id = lo.shopify_order_id
+      )
+  ) fee_rows
 )
 SELECT
   bc.value AS bundles_created,
@@ -732,10 +854,35 @@ SET reminder_email_count = LEAST(COALESCE(reminder_email_count, 0) + 1, 2),
 WHERE id = $1::integer;
 `;
 
-const UPDATE_LINK_GROUP_EXPIRED_EMAIL_SENT_SQL = `
+const CLAIM_LINK_GROUP_EXPIRED_EMAIL_SEND_SQL = `
 UPDATE link_groups
-SET expired_email_sent = TRUE
-WHERE id = $1::integer;
+SET expired_email_claimed_at = NOW()
+WHERE id = $1::integer
+  AND active_until IS NOT NULL
+  AND active_until <= NOW()
+  AND COALESCE(expired_email_sent, FALSE) = FALSE
+  AND (
+    expired_email_claimed_at IS NULL
+    OR expired_email_claimed_at <= NOW() - ($2::integer * INTERVAL '1 minute')
+  )
+RETURNING id, email, active_until, expired_email_claimed_at;
+`;
+
+const FINALIZE_LINK_GROUP_EXPIRED_EMAIL_SENT_SQL = `
+UPDATE link_groups
+SET expired_email_sent = TRUE,
+    expired_email_sent_at = COALESCE(expired_email_sent_at, NOW()),
+    expired_email_claimed_at = COALESCE(expired_email_claimed_at, NOW())
+WHERE id = $1::integer
+  AND COALESCE(expired_email_sent, FALSE) = FALSE
+RETURNING id;
+`;
+
+const RELEASE_LINK_GROUP_EXPIRED_EMAIL_CLAIM_SQL = `
+UPDATE link_groups
+SET expired_email_claimed_at = NULL
+WHERE id = $1::integer
+  AND COALESCE(expired_email_sent, FALSE) = FALSE;
 `;
 
 const SELECT_LINK_GROUP_PUBLIC_TOKEN_SQL = `
@@ -867,6 +1014,21 @@ WHERE reminder_email_sent IS NOT NULL OR reminder_email_count IS NOT NULL;
 
 const ALTER_LINK_GROUPS_ADD_EXPIRED_EMAIL_SENT_SQL = `
 ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS expired_email_sent BOOLEAN DEFAULT FALSE;
+`;
+
+const ALTER_LINK_GROUPS_ADD_EXPIRED_EMAIL_SENT_AT_SQL = `
+ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS expired_email_sent_at TIMESTAMP;
+`;
+
+const ALTER_LINK_GROUPS_ADD_EXPIRED_EMAIL_CLAIMED_AT_SQL = `
+ALTER TABLE link_groups ADD COLUMN IF NOT EXISTS expired_email_claimed_at TIMESTAMP;
+`;
+
+const BACKFILL_LINK_GROUPS_EXPIRED_EMAIL_SENT_AT_SQL = `
+UPDATE link_groups
+SET expired_email_sent_at = COALESCE(expired_email_sent_at, NOW())
+WHERE COALESCE(expired_email_sent, FALSE) = TRUE
+  AND expired_email_sent_at IS NULL;
 `;
 
 const ALTER_LINK_GROUPS_ADD_BUNDLE_PUBLIC_TOKEN_SQL = `
@@ -1475,6 +1637,75 @@ function generateBundlePublicToken() {
   return crypto.randomBytes(24).toString("hex");
 }
 
+function sanitizeAnalyticsPayload(rawPayload) {
+  if (!rawPayload || typeof rawPayload !== "object" || Array.isArray(rawPayload)) {
+    return {};
+  }
+  const sanitized = {};
+  for (const [key, value] of Object.entries(rawPayload)) {
+    if (!ANALYTICS_ALLOWED_PAYLOAD_FIELDS.has(key)) {
+      continue;
+    }
+    if (value == null) {
+      continue;
+    }
+    const normalized = String(value).trim();
+    if (!normalized) {
+      continue;
+    }
+    sanitized[key] = normalized.slice(0, 300);
+  }
+  return sanitized;
+}
+
+function sanitizeLandingAnalyticsPayload(rawPayload) {
+  if (!rawPayload || typeof rawPayload !== "object" || Array.isArray(rawPayload)) {
+    return null;
+  }
+
+  const eventName = String(rawPayload.event_name || "")
+    .trim()
+    .toLowerCase();
+  const variant = String(rawPayload.variant || "")
+    .trim()
+    .toLowerCase();
+  const path = String(rawPayload.path || "")
+    .trim()
+    .slice(0, 200);
+  const sessionId = String(rawPayload.session_id || "")
+    .trim()
+    .slice(0, 120);
+  const ctaLabel = String(rawPayload.cta_label || "")
+    .trim()
+    .slice(0, 200);
+  const section = String(rawPayload.section || "")
+    .trim()
+    .slice(0, 120);
+  const timestamp = String(rawPayload.timestamp || "")
+    .trim()
+    .slice(0, 80);
+
+  if (!LANDING_ANALYTICS_ALLOWED_EVENTS.has(eventName)) {
+    return null;
+  }
+  if (!LANDING_ANALYTICS_ALLOWED_VARIANTS.has(variant)) {
+    return null;
+  }
+  if (!path || !sessionId) {
+    return null;
+  }
+
+  return {
+    event_name: eventName,
+    variant,
+    path,
+    cta_label: ctaLabel || null,
+    section: section || null,
+    session_id: sessionId,
+    timestamp
+  };
+}
+
 async function ensureBundlePublicTokenForGroup(bundleId) {
   if (!dbPool || !bundleId) {
     return "";
@@ -1866,8 +2097,83 @@ async function getBundleNotificationSummary(bundleId) {
   if (!dbPool) {
     return null;
   }
-  const result = await dbPool.query(SELECT_BUNDLE_NOTIFICATION_SUMMARY_SQL, [bundleId]);
+  const result = await dbQueryWithRetry({
+    queryName: "bundle_notification_summary:select",
+    text: SELECT_BUNDLE_NOTIFICATION_SUMMARY_SQL,
+    values: [bundleId],
+    context: {
+      path: "bundle_email_notifications",
+      shopDomain: "",
+      orderId: ""
+    },
+    maxRetries: 1
+  });
   return result.rows[0] || null;
+}
+
+async function claimBundleExpiredEmailSend(bundleId, context = {}) {
+  if (!dbPool) {
+    return null;
+  }
+  const normalizedBundleId = Number(bundleId || 0);
+  if (!normalizedBundleId) {
+    return null;
+  }
+  const result = await dbQueryWithRetry({
+    queryName: "bundle_email_expired:claim",
+    text: CLAIM_LINK_GROUP_EXPIRED_EMAIL_SEND_SQL,
+    values: [normalizedBundleId, BUNDLECART_EXPIRED_EMAIL_CLAIM_STALE_MINUTES],
+    context: {
+      path: context.path || "bundle_email_worker",
+      shopDomain: String(context.shopDomain || ""),
+      orderId: String(context.orderId || "")
+    },
+    maxRetries: 1
+  });
+  return result.rows[0] || null;
+}
+
+async function finalizeBundleExpiredEmailSend(bundleId, context = {}) {
+  if (!dbPool) {
+    return false;
+  }
+  const normalizedBundleId = Number(bundleId || 0);
+  if (!normalizedBundleId) {
+    return false;
+  }
+  const result = await dbQueryWithRetry({
+    queryName: "bundle_email_expired:finalize",
+    text: FINALIZE_LINK_GROUP_EXPIRED_EMAIL_SENT_SQL,
+    values: [normalizedBundleId],
+    context: {
+      path: context.path || "bundle_email_worker",
+      shopDomain: String(context.shopDomain || ""),
+      orderId: String(context.orderId || "")
+    },
+    maxRetries: 1
+  });
+  return Number(result?.rowCount || 0) > 0;
+}
+
+async function releaseBundleExpiredEmailClaim(bundleId, context = {}) {
+  if (!dbPool) {
+    return;
+  }
+  const normalizedBundleId = Number(bundleId || 0);
+  if (!normalizedBundleId) {
+    return;
+  }
+  await dbQueryWithRetry({
+    queryName: "bundle_email_expired:release_claim",
+    text: RELEASE_LINK_GROUP_EXPIRED_EMAIL_CLAIM_SQL,
+    values: [normalizedBundleId],
+    context: {
+      path: context.path || "bundle_email_worker",
+      shopDomain: String(context.shopDomain || ""),
+      orderId: String(context.orderId || "")
+    },
+    maxRetries: 1
+  });
 }
 
 async function sendBundleStartedEmailNotification(bundleId, fallbackEmail, orderContext = {}) {
@@ -2230,6 +2536,14 @@ async function sendBundleExpiredEmail(bundle) {
 
   try {
     const summary = await getBundleNotificationSummary(bundleId);
+    if (!summary) {
+      console.log("Skipped duplicate email (already sent)", {
+        bundle_id: bundleId,
+        customer_email: String(bundle?.email || "").trim().toLowerCase(),
+        reason: "missing_bundle_summary_after_claim"
+      });
+      return false;
+    }
     const state = deriveBundleEmailState(summary);
     if (!state.isExpired) {
       console.log("BUNDLECART EMAIL SKIPPED", {
@@ -2309,25 +2623,100 @@ async function runBundleLifecycleEmailJobs() {
   if (!dbPool) {
     return;
   }
+  if (isBundleEmailBackfillActive) {
+    console.log("Skipped closed email during backfill", {
+      bundle_id: 0,
+      customer_email: "",
+      reason: "startup_backfill_active"
+    });
+    return;
+  }
 
   try {
-    const reminderBundlesResult = await dbPool.query(SELECT_BUNDLES_FOR_REMINDER_EMAIL_SQL, [
-      BUNDLECART_EMAIL_WORKER_BATCH_LIMIT
-    ]);
+    const reminderBundlesResult = await dbQueryWithRetry({
+      queryName: "bundle_email:select_reminder_candidates",
+      text: SELECT_BUNDLES_FOR_REMINDER_EMAIL_SQL,
+      values: [BUNDLECART_EMAIL_WORKER_BATCH_LIMIT],
+      context: {
+        path: "runBundleLifecycleEmailJobs",
+        shopDomain: "",
+        orderId: ""
+      },
+      maxRetries: 1
+    });
     for (const bundle of reminderBundlesResult.rows) {
       const sent = await sendBundleReminderEmail(bundle);
       if (sent) {
-        await dbPool.query(UPDATE_LINK_GROUP_REMINDER_EMAIL_SENT_SQL, [bundle.id]);
+        await dbQueryWithRetry({
+          queryName: "bundle_email:update_reminder_sent",
+          text: UPDATE_LINK_GROUP_REMINDER_EMAIL_SENT_SQL,
+          values: [bundle.id],
+          context: {
+            path: "runBundleLifecycleEmailJobs",
+            shopDomain: "",
+            orderId: ""
+          },
+          maxRetries: 1
+        });
       }
     }
 
-    const expiredBundlesResult = await dbPool.query(SELECT_BUNDLES_FOR_EXPIRED_EMAIL_SQL, [
-      BUNDLECART_EMAIL_WORKER_BATCH_LIMIT
-    ]);
+    const expiredBundlesResult = await dbQueryWithRetry({
+      queryName: "bundle_email:select_expired_candidates",
+      text: SELECT_BUNDLES_FOR_EXPIRED_EMAIL_SQL,
+      values: [BUNDLECART_EMAIL_WORKER_BATCH_LIMIT],
+      context: {
+        path: "runBundleLifecycleEmailJobs",
+        shopDomain: "",
+        orderId: ""
+      },
+      maxRetries: 1
+    });
     for (const bundle of expiredBundlesResult.rows) {
-      const sent = await sendBundleExpiredEmail(bundle);
-      if (sent) {
-        await dbPool.query(UPDATE_LINK_GROUP_EXPIRED_EMAIL_SENT_SQL, [bundle.id]);
+      const bundleId = Number(bundle?.id || 0);
+      const customerEmail = String(bundle?.email || "").trim().toLowerCase();
+      const claim = await claimBundleExpiredEmailSend(bundleId, {
+        path: "runBundleLifecycleEmailJobs",
+        shopDomain: "",
+        orderId: ""
+      });
+      if (!claim) {
+        console.log("Skipped duplicate email (already sent)", {
+          bundle_id: bundleId,
+          customer_email: customerEmail,
+          reason: "already_sent_or_claimed"
+        });
+        continue;
+      }
+
+      let sent = false;
+      try {
+        console.log("Sending bundle closed email", {
+          bundle_id: bundleId,
+          customer_email: customerEmail,
+          reason: "claim_acquired"
+        });
+        sent = await sendBundleExpiredEmail(bundle);
+        if (sent) {
+          await finalizeBundleExpiredEmailSend(bundleId, {
+            path: "runBundleLifecycleEmailJobs",
+            shopDomain: "",
+            orderId: ""
+          });
+        } else {
+          await releaseBundleExpiredEmailClaim(bundleId, {
+            path: "runBundleLifecycleEmailJobs",
+            shopDomain: "",
+            orderId: ""
+          });
+        }
+      } catch (error) {
+        await releaseBundleExpiredEmailClaim(bundleId, {
+          path: "runBundleLifecycleEmailJobs",
+          shopDomain: "",
+          orderId: ""
+        });
+        throw error;
       }
     }
   } catch (error) {
@@ -3970,9 +4359,15 @@ export async function ensureLinkingTablesExist() {
     await dbPool.query(ALTER_LINK_GROUPS_ADD_REMINDER_EMAIL_SENT_SQL);
     await dbPool.query(ALTER_LINK_GROUPS_ADD_REMINDER_EMAIL_COUNT_SQL);
     await dbPool.query(ALTER_LINK_GROUPS_ADD_EXPIRED_EMAIL_SENT_SQL);
+    await dbPool.query(ALTER_LINK_GROUPS_ADD_EXPIRED_EMAIL_SENT_AT_SQL);
+    await dbPool.query(ALTER_LINK_GROUPS_ADD_EXPIRED_EMAIL_CLAIMED_AT_SQL);
     await runNonCriticalSchemaQuery(
       BACKFILL_LINK_GROUPS_REMINDER_EMAIL_COUNT_SQL,
       "link_groups backfill reminder_email_count"
+    );
+    await runNonCriticalSchemaQuery(
+      BACKFILL_LINK_GROUPS_EXPIRED_EMAIL_SENT_AT_SQL,
+      "link_groups backfill expired_email_sent_at"
     );
     await dbPool.query(BACKFILL_LINK_GROUPS_FIRST_SHOP_DOMAIN_SQL);
     await dbPool.query(CREATE_LINK_GROUPS_BUNDLE_PUBLIC_TOKEN_UNIQUE_INDEX_SQL);
@@ -4004,6 +4399,8 @@ export async function ensureLinkingTablesExist() {
   } catch (error) {
     console.error("MIGRATION ERROR linked_orders", error);
   }
+
+  isBundleEmailBackfillActive = false;
 }
 
 export async function ensureBillingTablesExist() {
@@ -4042,6 +4439,10 @@ export async function ensureBundlecartFeeEventsTableExists() {
   try {
     await dbPool.query(CREATE_BUNDLECART_FEE_EVENTS_TABLE_SQL);
     await dbPool.query(CREATE_BUNDLECART_FEE_EVENTS_UNIQUE_INDEX_SQL);
+    const backfillResult = await dbPool.query(BACKFILL_BUNDLECART_FEE_EVENTS_FROM_LINKED_ORDERS_SQL);
+    console.log("MIGRATION BACKFILL bundlecart_fee_events_from_linked_orders", {
+      insertedRows: Number(backfillResult?.rowCount || 0)
+    });
     console.log("MIGRATION DONE bundlecart_fee_events");
     console.log("DB SCHEMA OK bundlecart_fee_events");
   } catch (error) {
@@ -4075,6 +4476,26 @@ export async function ensureMerchantBillingSubscriptionsTableExists() {
     console.log("DB SCHEMA OK merchant_billing_subscriptions");
   } catch (error) {
     console.error("MIGRATION ERROR merchant_billing_subscriptions", error);
+    if (isFatalDbError(error)) {
+      throw error;
+    }
+  }
+}
+
+export async function ensureLandingAnalyticsEventsTableExists() {
+  if (!dbPool) {
+    console.warn("DATABASE_URL not set; landing analytics persistence disabled.");
+    return;
+  }
+
+  console.log("MIGRATION START landing_analytics_events");
+  try {
+    await dbPool.query(CREATE_LANDING_ANALYTICS_EVENTS_TABLE_SQL);
+    await dbPool.query(CREATE_LANDING_ANALYTICS_EVENTS_INDEX_SQL);
+    console.log("MIGRATION DONE landing_analytics_events");
+    console.log("DB SCHEMA OK landing_analytics_events");
+  } catch (error) {
+    console.error("MIGRATION ERROR landing_analytics_events", error);
     if (isFatalDbError(error)) {
       throw error;
     }
@@ -5537,6 +5958,99 @@ export function createApp() {
   app.use("/api", express.json());
   app.use("/api/admin", requireBundleAdminAuth);
 
+  app.post("/api/track", (req, res) => {
+    try {
+      const eventName = String(req.body?.event || "").trim();
+      if (!ALLOWED_ANALYTICS_EVENTS.has(eventName)) {
+        res.status(200).json({ ok: true, ignored: "invalid_event" });
+        return;
+      }
+
+      const payload = sanitizeAnalyticsPayload(req.body?.payload);
+      const clientTimestamp = String(req.body?.clientTimestamp || "").trim().slice(0, 80);
+      const sessionId = String(req.body?.sessionId || "").trim().slice(0, 120);
+      const path = String(payload.path || payload.pagePath || "").trim().slice(0, 200);
+      const referrer = String(payload.referrer || req.get("referer") || "").trim().slice(0, 300);
+      const userAgent = String(payload.userAgent || req.get("user-agent") || "")
+        .trim()
+        .slice(0, 300);
+
+      const analyticsLogPayload = {
+        event: eventName,
+        path,
+        referrer,
+        userAgent,
+        variant: String(payload.variant || "").trim().slice(0, 80),
+        sessionId,
+        clientTimestamp,
+        serverTimestamp: new Date().toISOString(),
+        ...payload
+      };
+
+      console.log(`ANALYTICS_EVENT ${JSON.stringify(analyticsLogPayload)}`);
+      console.log("ANALYTICS_RECEIVED");
+      res.status(200).json({ ok: true });
+    } catch (error) {
+      console.error("ANALYTICS_TRACK_ERROR", {
+        message: String(error?.message || error || "unknown_analytics_error")
+      });
+      res.status(200).json({ ok: true });
+    }
+  });
+
+  app.post("/api/analytics/landing", async (req, res) => {
+    try {
+      const sanitized = sanitizeLandingAnalyticsPayload(req.body);
+      if (!sanitized) {
+        res.status(200).json({ ok: true, ignored: "invalid_landing_payload" });
+        return;
+      }
+
+      if (!dbPool) {
+        console.warn("LANDING_ANALYTICS_DB_UNAVAILABLE", {
+          event_name: sanitized.event_name,
+          variant: sanitized.variant,
+          session_id: sanitized.session_id
+        });
+        res.status(200).json({ ok: true, stored: false });
+        return;
+      }
+
+      await dbQueryWithRetry({
+        queryName: "landing_analytics:insert",
+        text: INSERT_LANDING_ANALYTICS_EVENT_SQL,
+        values: [
+          sanitized.event_name,
+          sanitized.variant,
+          sanitized.path,
+          sanitized.cta_label,
+          sanitized.section,
+          sanitized.session_id,
+          sanitized.timestamp || null
+        ],
+        context: {
+          path: "/api/analytics/landing",
+          orderId: "",
+          shopDomain: ""
+        },
+        maxRetries: 1
+      });
+
+      console.log(
+        "Saved landing event",
+        sanitized.event_name,
+        sanitized.variant,
+        sanitized.session_id
+      );
+      res.status(200).json({ ok: true, stored: true });
+    } catch (error) {
+      console.error("LANDING_ANALYTICS_SAVE_ERROR", {
+        message: String(error?.message || error || "unknown_landing_analytics_error")
+      });
+      res.status(200).json({ ok: true, stored: false });
+    }
+  });
+
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true, time: new Date().toISOString() });
   });
@@ -6207,6 +6721,7 @@ if (isDirectRun && process.env.NODE_ENV !== "test") {
     .then(() => ensureBundlecartFeeEventsTableExists())
     .then(() => ensureBillingTablesExist())
     .then(() => ensureMerchantBillingSubscriptionsTableExists())
+    .then(() => ensureLandingAnalyticsEventsTableExists())
     .catch((error) => {
       console.error("Failed to ensure shopify_orders table", error?.message || error);
     })
