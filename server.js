@@ -84,6 +84,7 @@ const ANALYTICS_ALLOWED_PAYLOAD_FIELDS = new Set([
   "sourcePage",
   "destinationUrl",
   "linkLabel",
+  "variant",
   "sessionId",
   "timestamp",
   "userAgent"
@@ -1584,6 +1585,27 @@ function buildBundlecartBillingIdempotencyKey({ shopDomain, bundleId, orderId, a
 
 function generateBundlePublicToken() {
   return crypto.randomBytes(24).toString("hex");
+}
+
+function sanitizeAnalyticsPayload(rawPayload) {
+  if (!rawPayload || typeof rawPayload !== "object" || Array.isArray(rawPayload)) {
+    return {};
+  }
+  const sanitized = {};
+  for (const [key, value] of Object.entries(rawPayload)) {
+    if (!ANALYTICS_ALLOWED_PAYLOAD_FIELDS.has(key)) {
+      continue;
+    }
+    if (value == null) {
+      continue;
+    }
+    const normalized = String(value).trim();
+    if (!normalized) {
+      continue;
+    }
+    sanitized[key] = normalized.slice(0, 300);
+  }
+  return sanitized;
 }
 
 async function ensureBundlePublicTokenForGroup(bundleId) {
@@ -5817,6 +5839,46 @@ export function createApp() {
 
   app.use("/api", express.json());
   app.use("/api/admin", requireBundleAdminAuth);
+
+  app.post("/api/track", (req, res) => {
+    try {
+      const eventName = String(req.body?.event || "").trim();
+      if (!ALLOWED_ANALYTICS_EVENTS.has(eventName)) {
+        res.status(200).json({ ok: true, ignored: "invalid_event" });
+        return;
+      }
+
+      const payload = sanitizeAnalyticsPayload(req.body?.payload);
+      const clientTimestamp = String(req.body?.clientTimestamp || "").trim().slice(0, 80);
+      const sessionId = String(req.body?.sessionId || "").trim().slice(0, 120);
+      const path = String(payload.path || payload.pagePath || "").trim().slice(0, 200);
+      const referrer = String(payload.referrer || req.get("referer") || "").trim().slice(0, 300);
+      const userAgent = String(payload.userAgent || req.get("user-agent") || "")
+        .trim()
+        .slice(0, 300);
+
+      const analyticsLogPayload = {
+        event: eventName,
+        path,
+        referrer,
+        userAgent,
+        variant: String(payload.variant || "").trim().slice(0, 80),
+        sessionId,
+        clientTimestamp,
+        serverTimestamp: new Date().toISOString(),
+        ...payload
+      };
+
+      console.log(`ANALYTICS_EVENT ${JSON.stringify(analyticsLogPayload)}`);
+      console.log("ANALYTICS_RECEIVED");
+      res.status(200).json({ ok: true });
+    } catch (error) {
+      console.error("ANALYTICS_TRACK_ERROR", {
+        message: String(error?.message || error || "unknown_analytics_error")
+      });
+      res.status(200).json({ ok: true });
+    }
+  });
 
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true, time: new Date().toISOString() });

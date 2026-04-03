@@ -165,19 +165,20 @@ const FAQ_ITEMS = [
 
 const HOME_BLOG_PREVIEW_POSTS = getLatestBlogPosts(3);
 
-export default function MarketingPage() {
+export default function MarketingPage({ variant = "control" }) {
   const [isInstallModalOpen, setIsInstallModalOpen] = useState(false);
   const [shopDomainInput, setShopDomainInput] = useState("");
   const [installError, setInstallError] = useState("");
   useEffect(() => {
-    trackEvent("page_view", { path: "/" });
-  }, []);
+    trackEvent("page_view", { path: "/", variant });
+  }, [variant]);
 
   function openInstallModal() {
     trackEvent("cta_click", {
       buttonName: "Install BundleCart",
       buttonLabel: "Install BundleCart",
-      path: "/"
+      path: "/",
+      variant
     });
     setInstallError("");
     setIsInstallModalOpen(true);
@@ -261,7 +262,8 @@ export default function MarketingPage() {
                 trackEvent("cta_click", {
                   buttonName: "See how it works",
                   buttonLabel: "See how it works",
-                  path: "/"
+                  path: "/",
+                  variant
                 });
               }}
             >
@@ -473,7 +475,8 @@ export default function MarketingPage() {
                   trackEvent("blog_card_click", {
                     blogTitle: post.title,
                     blogSlug: post.slug,
-                    sourcePage: "/"
+                    sourcePage: "/",
+                    variant
                   });
                 }}
               >

@@ -9,6 +9,7 @@ const ALLOWED_EVENTS = new Set([
 ]);
 
 const SESSION_STORAGE_KEY = "bundlecart_session_id";
+const LANDING_VARIANT_SESSION_KEY = "bundlecart_landing_variant";
 
 function isBrowser() {
   return typeof window !== "undefined";
@@ -44,9 +45,25 @@ export function trackEvent(eventName, payload = {}) {
     return;
   }
 
+  const normalizedPayload = payload && typeof payload === "object" ? { ...payload } : {};
+  if (!normalizedPayload.variant && isBrowser()) {
+    try {
+      const sessionVariant = String(
+        window.sessionStorage.getItem(LANDING_VARIANT_SESSION_KEY) || ""
+      )
+        .trim()
+        .toLowerCase();
+      if (sessionVariant) {
+        normalizedPayload.variant = sessionVariant;
+      }
+    } catch {
+      // Ignore storage errors by design.
+    }
+  }
+
   const body = {
     event: normalizedEvent,
-    payload: payload && typeof payload === "object" ? payload : {},
+    payload: normalizedPayload,
     clientTimestamp: new Date().toISOString(),
     sessionId: getAnalyticsSessionId()
   };
@@ -78,4 +95,18 @@ export function trackEvent(eventName, payload = {}) {
     .catch(() => {
       // Fail silently by design.
     });
+}
+
+export function getAnalyticsReferrer() {
+  if (!isBrowser() || typeof document === "undefined") {
+    return "";
+  }
+  return String(document.referrer || "").trim();
+}
+
+export function getAnalyticsPath() {
+  if (!isBrowser() || typeof window === "undefined" || !window.location) {
+    return "";
+  }
+  return String(window.location.pathname || "").trim();
 }

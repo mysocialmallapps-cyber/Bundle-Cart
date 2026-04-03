@@ -6,10 +6,15 @@ import PublicBundlePage from "./pages/PublicBundlePage";
 import MarketingPage from "./pages/MarketingPage";
 import BlogPage from "./pages/BlogPage";
 import BlogPostPage from "./pages/BlogPostPage";
+import { resolveLandingVariant } from "./lib/landingVariant";
 
 export default function App() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
+  const landingVariant = resolveLandingVariant({
+    urlVariant: searchParams.get("variant"),
+    persistInSession: true
+  });
   const shop = String(searchParams.get("shop") || "")
     .trim()
     .toLowerCase();
@@ -39,7 +44,16 @@ export default function App() {
       <main className="main">
         <section className="page-content">
           <Routes>
-            <Route path="/" element={<MarketingPage />} />
+            <Route
+              path="/"
+              element={
+                landingVariant === "repeat_purchase_v1" ? (
+                  <MarketingPage variant="repeat_purchase_v1" />
+                ) : (
+                  <MarketingPage variant="control" />
+                )
+              }
+            />
             <Route path="/blog" element={<BlogPage />} />
             <Route path="/blog/:slug" element={<BlogPostPage />} />
             <Route path="/bundle" element={<PublicBundlePage />} />
