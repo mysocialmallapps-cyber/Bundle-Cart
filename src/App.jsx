@@ -91,7 +91,7 @@ export default function App() {
   if (isPublicBundlePage || isMarketingPage || isBlogPage) {
     return (
       <main className="main">
-        <section className="page-content">
+        <section className="page-content page-content-public">
           {showPublicHeader ? (
             <div className="public-site-header-shell">
               <PublicSiteHeader onInstallClick={openInstallModal} />

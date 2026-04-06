@@ -70,7 +70,7 @@ const PRICING_TIERS = [
     features: [
       "Up to 100 bundle orders/month",
       "Basic analytics",
-      "$5 when a customer selects BundleCart at checkout",
+      "+$5 when a customer selects BundleCart at checkout",
       "All additional orders in the 72-hour window are free"
     ],
     featured: false
@@ -81,7 +81,7 @@ const PRICING_TIERS = [
     features: [
       "Up to 1,000 bundle orders/month",
       "Full merchant dashboard",
-      "$5 when a customer selects BundleCart at checkout",
+      "+$5 when a customer selects BundleCart at checkout",
       "All additional orders in the 72-hour window are free"
     ],
     featured: true
@@ -92,7 +92,7 @@ const PRICING_TIERS = [
     features: [
       "Unlimited bundle orders",
       "Priority support",
-      "$5 when a customer selects BundleCart at checkout",
+      "+$5 when a customer selects BundleCart at checkout",
       "All additional orders in the 72-hour window are free"
     ],
     featured: false

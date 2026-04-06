@@ -110,6 +110,10 @@ a {
   padding: 24px;
 }
 
+.page-content-public {
+  padding-bottom: calc(104px + env(safe-area-inset-bottom, 0px));
+}
+
 .page {
   display: flex;
   flex-direction: column;
