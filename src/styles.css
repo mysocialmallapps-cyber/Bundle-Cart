@@ -419,6 +419,11 @@ input:focus {
   gap: 28px;
 }
 
+.public-site-header-shell {
+  max-width: 1160px;
+  margin: 0 auto 20px;
+}
+
 .marketing-header {
   position: sticky;
   top: 0;

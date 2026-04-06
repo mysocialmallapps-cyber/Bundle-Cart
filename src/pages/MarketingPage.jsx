@@ -1,20 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { getLatestBlogPosts } from "../content/blogPosts";
 import { trackEvent, trackLandingEvent } from "../lib/analytics";
-
-const SHOP_DOMAIN_SUFFIX = ".myshopify.com";
-
-function normalizeShopDomainInput(value) {
-  const trimmed = String(value || "").trim().toLowerCase();
-  const withoutProtocol = trimmed.replace(/^https?:\/\//, "");
-  return withoutProtocol.split("/")[0];
-}
-
-function isValidShopDomain(value) {
-  const normalized = normalizeShopDomainInput(value);
-  return normalized.endsWith(SHOP_DOMAIN_SUFFIX) && normalized.length > SHOP_DOMAIN_SUFFIX.length;
-}
 
 const HOW_IT_WORKS_STEPS = [
   {
@@ -256,10 +243,7 @@ const VARIANT_CONTENT = {
 
 const HOME_BLOG_PREVIEW_POSTS = getLatestBlogPosts(3);
 
-export default function MarketingPage({ variant = "control" }) {
-  const [isInstallModalOpen, setIsInstallModalOpen] = useState(false);
-  const [shopDomainInput, setShopDomainInput] = useState("");
-  const [installError, setInstallError] = useState("");
+export default function MarketingPage({ variant = "control", onOpenInstallModal }) {
   const isRepeatPurchaseV1 = variant === "repeat_purchase_v1";
   const variantConfig = VARIANT_CONTENT[isRepeatPurchaseV1 ? "repeat_purchase_v1" : "control"];
   function trackHomepageLandingEvent(eventName, extraPayload) {
@@ -287,24 +271,8 @@ export default function MarketingPage({ variant = "control" }) {
       cta_label: "Install BundleCart",
       section: "hero"
     });
-    setInstallError("");
-    setIsInstallModalOpen(true);
-  }
-
-  function closeInstallModal() {
-    setInstallError("");
-    setIsInstallModalOpen(false);
-  }
-
-  function handleInstallSubmit(event) {
-    event.preventDefault();
-    const normalized = normalizeShopDomainInput(shopDomainInput);
-    if (!isValidShopDomain(normalized)) {
-      setInstallError("Please enter a valid Shopify domain ending in .myshopify.com");
-      return;
-    }
-    if (typeof window !== "undefined") {
-      window.location.assign(`/auth?shop=${encodeURIComponent(normalized)}`);
+    if (typeof onOpenInstallModal === "function") {
+      onOpenInstallModal();
     }
   }
 
@@ -321,31 +289,6 @@ export default function MarketingPage({ variant = "control" }) {
 
   return (
     <div className="marketing-page">
-      <header className="marketing-header">
-        <div className="marketing-header-inner">
-          <Link to="/" className="marketing-logo" aria-label="BundleCart home">
-            <img src="/logo.png" alt="BundleCart" />
-            <span>BundleCart</span>
-          </Link>
-          <nav className="marketing-main-nav" aria-label="Primary navigation">
-            <Link to="/" className="marketing-main-nav-link marketing-main-nav-link-active">
-              Home
-            </Link>
-            <Link to="/blog" className="marketing-main-nav-link">
-              Blog
-            </Link>
-          </nav>
-          <button
-            type="button"
-            className="marketing-btn marketing-btn-primary marketing-cta"
-            onClick={openInstallModal}
-            title="Install BundleCart"
-          >
-            Install BundleCart
-          </button>
-        </div>
-      </header>
-
       <section className="marketing-hero">
         <div className="marketing-hero-content">
           <div>
@@ -670,50 +613,6 @@ export default function MarketingPage({ variant = "control" }) {
         </div>
       </section>
 
-      {isInstallModalOpen ? (
-        <div className="marketing-modal-backdrop" role="presentation" onClick={closeInstallModal}>
-          <div
-            className="marketing-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="bundlecart-install-modal-title"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <h3 id="bundlecart-install-modal-title">Install BundleCart</h3>
-            <p>Enter your Shopify store domain to start the install flow.</p>
-            <form onSubmit={handleInstallSubmit} className="marketing-modal-form">
-              <label className="marketing-modal-label" htmlFor="bundlecart-shop-domain">
-                Shopify store domain
-              </label>
-              <input
-                id="bundlecart-shop-domain"
-                className="marketing-modal-input"
-                type="text"
-                autoFocus
-                placeholder="yourstore.myshopify.com"
-                value={shopDomainInput}
-                onChange={(event) => {
-                  setInstallError("");
-                  setShopDomainInput(event.target.value);
-                }}
-              />
-              {installError ? <p className="marketing-modal-error">{installError}</p> : null}
-              <div className="marketing-modal-actions">
-                <button
-                  type="button"
-                  className="marketing-btn marketing-btn-secondary"
-                  onClick={closeInstallModal}
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="marketing-btn marketing-btn-primary">
-                  Continue
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 }
