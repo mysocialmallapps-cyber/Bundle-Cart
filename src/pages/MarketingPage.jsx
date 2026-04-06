@@ -343,33 +343,7 @@ export default function MarketingPage({ variant = "control", onOpenInstallModal 
               alt="BundleCart live in Shopify checkout"
             />
           </div>
-          <div className="marketing-preview-grid">
-            <article>
-              <span>Bundles created</span>
-              <strong>124</strong>
-            </article>
-            <article>
-              <span>Extra orders generated</span>
-              <strong>286</strong>
-            </article>
-            <article>
-              <span>Network orders</span>
-              <strong>78</strong>
-            </article>
-            <article>
-              <span>Avg orders per bundle</span>
-              <strong>2.7</strong>
-            </article>
-          </div>
-          <p className="marketing-preview-foot">
-            Merchants can show customers one shipping payment, then capture additional orders in the next
-            72 hours.
-          </p>
         </aside>
-        <div className="marketing-hero-stats">
-          +29% repeat purchases • 2.2 orders per customer • 36% revenue growth
-          <div className="marketing-hero-stats-sub">Tested on early Shopify stores</div>
-        </div>
       </section>
 
       <section className="marketing-section marketing-proof-strip" aria-label="Early results">
