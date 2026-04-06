@@ -764,12 +764,12 @@ input:focus {
 
 .marketing-proof-strip {
   display: grid;
-  gap: 14px;
+  gap: 16px;
   background: linear-gradient(180deg, #fcfaff 0%, #f7f3ff 100%);
-  border: 1px solid #e6dcff;
-  border-radius: 18px;
-  padding: 20px;
-  box-shadow: 0 12px 24px rgba(40, 25, 88, 0.08);
+  border: 1px solid #e2d5ff;
+  border-radius: 20px;
+  padding: 22px;
+  box-shadow: 0 16px 30px rgba(40, 25, 88, 0.1);
 }
 
 .marketing-proof-grid {
@@ -778,46 +778,46 @@ input:focus {
 
 .marketing-proof-card {
   background: #fff;
-  border: 1px solid #dfd3ff;
-  border-radius: 16px;
-  padding: 16px 16px 14px;
-  box-shadow: 0 10px 20px rgba(34, 23, 73, 0.08);
+  border: 1px solid #daccff;
+  border-radius: 18px;
+  padding: 18px 18px 16px;
+  box-shadow: 0 12px 22px rgba(34, 23, 73, 0.1);
   display: grid;
-  gap: 6px;
-  min-height: 108px;
+  gap: 8px;
+  min-height: 122px;
   align-content: center;
 }
 
 .marketing-proof-value {
   margin: 0;
-  color: #2e1d63;
-  font-size: clamp(1.9rem, 3.2vw, 2.25rem);
-  font-weight: 800;
+  color: #281653;
+  font-size: clamp(2.1rem, 3.5vw, 2.5rem);
+  font-weight: 850;
   line-height: 1.04;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.015em;
 }
 
 .marketing-proof-label {
   margin: 0;
-  color: #5b5477;
-  font-size: 0.92rem;
-  font-weight: 600;
+  color: #544d70;
+  font-size: 0.93rem;
+  font-weight: 650;
 }
 
 .marketing-proof-credibility-line {
   margin: 0;
   text-align: center;
-  font-size: 0.82rem;
-  font-weight: 600;
-  letter-spacing: 0.03em;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: #7a6aa9;
+  color: #6f609f;
 }
 
 .marketing-proof-testimonial-card {
-  margin-top: 0;
-  border-color: #ded2ff;
-  box-shadow: 0 10px 20px rgba(38, 24, 82, 0.08);
+  margin-top: 2px;
+  border-color: #dccfff;
+  box-shadow: 0 12px 22px rgba(38, 24, 82, 0.09);
 }
 
 .marketing-demo-section {
@@ -890,35 +890,35 @@ input:focus {
 .marketing-testimonial-card {
   margin-top: 14px;
   background: #ffffff;
-  border: 1px solid #e4dcff;
-  border-radius: 14px;
-  padding: 14px;
-  box-shadow: 0 8px 18px rgba(34, 23, 73, 0.06);
+  border: 1px solid #e0d6ff;
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: 0 10px 20px rgba(34, 23, 73, 0.07);
   display: grid;
-  gap: 8px;
+  gap: 9px;
 }
 
 .marketing-testimonial-label {
   margin: 0;
-  color: #523ba4;
-  font-size: 0.82rem;
+  color: #4d359b;
+  font-size: 0.78rem;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.07em;
 }
 
 .marketing-testimonial-card blockquote {
   margin: 0;
-  color: #4f476d;
-  line-height: 1.55;
-  font-size: 0.96rem;
+  color: #473f66;
+  line-height: 1.58;
+  font-size: 0.98rem;
 }
 
 .marketing-testimonial-role {
   margin: 0;
-  color: #6a6287;
-  font-size: 0.83rem;
-  font-weight: 600;
+  color: #655d83;
+  font-size: 0.82rem;
+  font-weight: 650;
 }
 
 .marketing-demo-note {
@@ -2170,6 +2170,10 @@ input:focus {
 
   .marketing-proof-credibility-line {
     font-size: 0.76rem;
+  }
+
+  .marketing-proof-support {
+    font-size: 0.9rem;
   }
 
   .marketing-section-tinted {

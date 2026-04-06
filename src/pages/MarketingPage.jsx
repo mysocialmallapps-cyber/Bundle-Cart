@@ -52,7 +52,8 @@ const IMPACT_METRICS = [
 
 const PROOF_STATS = [
   { value: "+29%", label: "Repeat purchases" },
-  { value: "2.2", label: "Orders per customer" }
+  { value: "2.2", label: "Orders per customer" },
+  { value: "+33%", label: "Revenue growth" }
 ];
 
 const TRUST_LAYER_ITEMS = [
@@ -346,12 +347,12 @@ export default function MarketingPage({ variant = "control", onOpenInstallModal 
         </aside>
       </section>
 
-      <section className="marketing-section marketing-proof-strip" aria-label="Early results">
+      <section className="marketing-section marketing-proof-strip" aria-label="Proven results">
         <div className="marketing-section-header">
-          <h2>Early results</h2>
-          <p>BundleCart is already helping early Shopify stores generate more repeat purchases.</p>
+          <h2>Proven results</h2>
+          <p>BundleCart is already increasing repeat purchases for Shopify stores.</p>
         </div>
-        <div className="marketing-grid marketing-grid-2 marketing-proof-grid">
+        <div className="marketing-grid marketing-grid-3 marketing-proof-grid">
           {PROOF_STATS.map((stat) => (
             <article key={`${stat.value}-${stat.label}`} className="marketing-proof-card">
               <p className="marketing-proof-value">{stat.value}</p>
@@ -359,9 +360,11 @@ export default function MarketingPage({ variant = "control", onOpenInstallModal 
             </article>
           ))}
         </div>
-        <p className="marketing-proof-credibility-line">Tested on early Shopify stores</p>
+        <p className="marketing-proof-credibility-line">
+          <span>Tested on early Shopify stores</span>
+        </p>
         <article className="marketing-testimonial-card marketing-proof-testimonial-card">
-          <p className="marketing-testimonial-label">Early merchant feedback</p>
+          <p className="marketing-testimonial-label">Merchant feedback</p>
           <blockquote>
             “We barely had repeat orders before. With BundleCart, we started getting more repeat
             purchases than new ones.”
