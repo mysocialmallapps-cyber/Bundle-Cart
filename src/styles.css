@@ -1534,6 +1534,13 @@ input:focus {
   color: #4f4768;
 }
 
+.marketing-pricing-usage-line {
+  margin: 0;
+  color: #7a6f9f;
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
 .marketing-pricing-badge {
   margin: 0;
   width: fit-content;
@@ -1566,6 +1573,10 @@ input:focus {
   color: #dfd6ff;
 }
 
+.marketing-pricing-tier-featured .marketing-pricing-usage-line {
+  color: #d7ccff;
+}
+
 .marketing-pricing-tier-featured .marketing-pricing-badge {
   color: #3f227e;
   background: #fff;
@@ -1578,6 +1589,24 @@ input:focus {
 
 .marketing-pricing-growth-line {
   margin-bottom: 14px;
+}
+
+.marketing-pricing-how {
+  margin: 10px 0 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.marketing-pricing-how h3 {
+  margin: 0;
+}
+
+.marketing-pricing-how ul {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+  color: #5b546f;
 }
 
 .marketing-faq-list {

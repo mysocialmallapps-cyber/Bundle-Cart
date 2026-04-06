@@ -67,19 +67,34 @@ const PRICING_TIERS = [
   {
     name: "Starter",
     price: "$20/month",
-    features: ["Up to 100 bundle orders/month", "Basic analytics", "Email support"],
+    features: [
+      "Up to 100 bundle orders/month",
+      "Basic analytics",
+      "Email support",
+      "+ $5 per qualifying bundle order"
+    ],
     featured: false
   },
   {
     name: "Growth",
     price: "$50/month",
-    features: ["Up to 1000 bundle orders/month", "Full merchant dashboard", "Core features"],
+    features: [
+      "Up to 1000 bundle orders/month",
+      "Full merchant dashboard",
+      "Core features",
+      "+ $5 per qualifying bundle order"
+    ],
     featured: true
   },
   {
     name: "Scale",
     price: "$100/month",
-    features: ["Unlimited orders", "Priority support", "Advanced insights"],
+    features: [
+      "Unlimited orders",
+      "Priority support",
+      "Advanced insights",
+      "+ $5 per qualifying bundle order"
+    ],
     featured: false
   }
 ];
@@ -539,10 +554,18 @@ export default function MarketingPage({ variant = "control", onOpenInstallModal 
           ))}
         </div>
         <p className="subtle marketing-pricing-logic-line">
-          Only pay when BundleCart drives qualifying first orders. Repeat orders in the same window are
-          not billed again.
+          Only pay when BundleCart drives a qualifying first order.
         </p>
         <p className="subtle">{variantConfig.pricingSubtle}</p>
+        <div className="marketing-pricing-how-it-works">
+          <h3>How pricing works</h3>
+          <ul className="marketing-pricing-how-it-works-list">
+            <li>You only pay for the first order in a bundle</li>
+            <li>Additional orders in the 72-hour window are free</li>
+            <li>Repeat linked orders are not charged again</li>
+            <li>Pricing is aligned with performance — you pay when BundleCart drives value</li>
+          </ul>
+        </div>
         <p className="subtle marketing-pricing-growth-line">
           Start small and scale as your repeat purchases grow.
         </p>
