@@ -151,9 +151,9 @@ const VARIANT_CONTENT = {
         "Participating stores can receive additional orders from customers already inside active BundleCart windows."
     },
     impactSection: {
-      title: "Track the impact",
+      title: "Merchant dashboard",
       subtitle:
-        "BundleCart gives stores visibility into linked orders, repeat purchases, and shipping-driven revenue behavior.",
+        "BundleCart gives merchants real-time visibility into linked orders, repeat purchases, and shipping-driven revenue.",
       cards: IMPACT_METRICS
     },
     faqItems: FAQ_ITEMS,
@@ -223,9 +223,9 @@ const VARIANT_CONTENT = {
         "Participating stores can receive additional orders from customers already inside active BundleCart windows."
     },
     impactSection: {
-      title: "Track the impact",
+      title: "Merchant dashboard",
       subtitle:
-        "BundleCart gives stores visibility into linked orders, repeat purchases, and shipping-driven revenue behavior.",
+        "BundleCart gives merchants real-time visibility into linked orders, repeat purchases, and shipping-driven revenue.",
       cards: IMPACT_METRICS
     },
     faqItems: FAQ_ITEMS,
@@ -456,6 +456,7 @@ export default function MarketingPage({ variant = "control", onOpenInstallModal 
 
       <section className="marketing-section">
         <div className="marketing-section-header">
+          <p className="marketing-eyebrow">Live merchant data</p>
           <h2>{variantConfig.impactSection.title}</h2>
           <p>{variantConfig.impactSection.subtitle}</p>
         </div>
