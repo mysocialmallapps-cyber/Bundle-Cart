@@ -834,19 +834,6 @@ input:focus {
   background: #120c2e;
 }
 
-.marketing-demo-play {
-  width: 56px;
-  height: 56px;
-  border-radius: 999px;
-  background: #6d28d9;
-  color: #fff;
-  display: inline-grid;
-  place-items: center;
-  margin: 0 auto;
-  font-size: 1.1rem;
-  box-shadow: 0 10px 22px rgba(109, 40, 217, 0.28);
-}
-
 .marketing-before-after-card {
   display: grid;
   gap: 10px;

@@ -400,6 +400,9 @@ export default function MarketingPage({ variant = "control", onOpenInstallModal 
         <video
           className="marketing-demo-video"
           src="/OLD_bundlecart-demo.mp4"
+          autoPlay
+          muted
+          loop
           controls
           playsInline
           preload="metadata"
