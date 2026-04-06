@@ -454,24 +454,13 @@ export default function MarketingPage({ variant = "control" }) {
           <h2>{variantConfig.demo.title}</h2>
           <p>{variantConfig.demo.body}</p>
         </div>
-        <button
-          type="button"
-          className="marketing-demo-placeholder"
-          onClick={() => {
-            trackHomepageLandingEvent("landing_cta_click", {
-              cta_label: "Demo placeholder",
-              section: "demo_placeholder"
-            });
-            trackHomepageLandingEvent("demo_placeholder_click", {
-              cta_label: "Demo placeholder",
-              section: "demo_placeholder"
-            });
-          }}
-          title="Demo placeholder"
-        >
-          <span className="marketing-demo-play">▶</span>
-          <span>Demo placeholder — add local video asset later</span>
-        </button>
+        <video
+          className="marketing-demo-video"
+          src="/OLD_bundlecart-demo.mp4"
+          controls
+          playsInline
+          preload="metadata"
+        />
       </section>
 
       <section className="marketing-section">
