@@ -52,8 +52,7 @@ const IMPACT_METRICS = [
 
 const PROOF_STATS = [
   { value: "+29%", label: "Repeat purchases" },
-  { value: "2.2", label: "Orders per customer" },
-  { value: "Tested on early Shopify stores", label: "" }
+  { value: "2.2", label: "Orders per customer" }
 ];
 
 const TRUST_LAYER_ITEMS = [
@@ -376,15 +375,25 @@ export default function MarketingPage({ variant = "control", onOpenInstallModal 
       <section className="marketing-section marketing-proof-strip" aria-label="Early results">
         <div className="marketing-section-header">
           <h2>Early results</h2>
+          <p>BundleCart is already helping early Shopify stores generate more repeat purchases.</p>
         </div>
-        <div className="marketing-grid marketing-grid-3">
+        <div className="marketing-grid marketing-grid-2 marketing-proof-grid">
           {PROOF_STATS.map((stat) => (
             <article key={`${stat.value}-${stat.label}`} className="marketing-proof-card">
               <p className="marketing-proof-value">{stat.value}</p>
-              {stat.label ? <p className="marketing-proof-label">{stat.label}</p> : null}
+              <p className="marketing-proof-label">{stat.label}</p>
             </article>
           ))}
         </div>
+        <p className="marketing-proof-credibility-line">Tested on early Shopify stores</p>
+        <article className="marketing-testimonial-card marketing-proof-testimonial-card">
+          <p className="marketing-testimonial-label">Early merchant feedback</p>
+          <blockquote>
+            “We barely had repeat orders before. With BundleCart, we started getting more repeat
+            purchases than new ones.”
+          </blockquote>
+          <p className="marketing-testimonial-role">— Shopify fashion store</p>
+        </article>
       </section>
 
       <section className="marketing-trust-strip" aria-label="Trust highlights">
@@ -482,15 +491,6 @@ export default function MarketingPage({ variant = "control", onOpenInstallModal 
               </article>
             ))}
           </div>
-          <article className="marketing-testimonial-card">
-            <p className="marketing-testimonial-label">Early merchant feedback</p>
-            <blockquote>
-              “We&apos;re a new store and struggled to get repeat orders. After adding BundleCart,
-              customers actually started coming back — we&apos;ve seen more repeat purchases in a few
-              days than before.”
-            </blockquote>
-            <p className="marketing-testimonial-role">Shopify store owner</p>
-          </article>
         </div>
       </section>
 

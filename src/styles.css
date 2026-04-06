@@ -779,31 +779,60 @@ input:focus {
 
 .marketing-proof-strip {
   display: grid;
-  gap: 12px;
+  gap: 14px;
+  background: linear-gradient(180deg, #fcfaff 0%, #f7f3ff 100%);
+  border: 1px solid #e6dcff;
+  border-radius: 18px;
+  padding: 20px;
+  box-shadow: 0 12px 24px rgba(40, 25, 88, 0.08);
+}
+
+.marketing-proof-grid {
+  align-items: stretch;
 }
 
 .marketing-proof-card {
   background: #fff;
-  border: 1px solid #e4dbff;
-  border-radius: 14px;
-  padding: 14px;
-  box-shadow: 0 8px 18px rgba(34, 23, 73, 0.06);
+  border: 1px solid #dfd3ff;
+  border-radius: 16px;
+  padding: 16px 16px 14px;
+  box-shadow: 0 10px 20px rgba(34, 23, 73, 0.08);
   display: grid;
-  gap: 4px;
+  gap: 6px;
+  min-height: 108px;
+  align-content: center;
 }
 
 .marketing-proof-value {
   margin: 0;
-  color: #2f1f63;
-  font-size: 1.45rem;
+  color: #2e1d63;
+  font-size: clamp(1.9rem, 3.2vw, 2.25rem);
   font-weight: 800;
-  line-height: 1.15;
+  line-height: 1.04;
+  letter-spacing: -0.01em;
 }
 
 .marketing-proof-label {
   margin: 0;
-  color: #5f567c;
-  font-size: 0.9rem;
+  color: #5b5477;
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.marketing-proof-credibility-line {
+  margin: 0;
+  text-align: center;
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #7a6aa9;
+}
+
+.marketing-proof-testimonial-card {
+  margin-top: 0;
+  border-color: #ded2ff;
+  box-shadow: 0 10px 20px rgba(38, 24, 82, 0.08);
 }
 
 .marketing-demo-section {
@@ -1329,18 +1358,18 @@ input:focus {
 .marketing-trust-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(140px, 1fr));
-  gap: 10px;
+  gap: 8px;
 }
 
 .marketing-trust-chip {
-  background: #f6f1ff;
-  color: #493a7f;
-  border: 1px solid #e8ddff;
+  background: #faf8ff;
+  color: #5d5283;
+  border: 1px solid #ece5ff;
   border-radius: 999px;
-  padding: 8px 12px;
+  padding: 7px 11px;
   text-align: center;
-  font-size: 0.84rem;
-  font-weight: 600;
+  font-size: 0.8rem;
+  font-weight: 550;
 }
 
 .marketing-section h2 {
@@ -2150,6 +2179,15 @@ input:focus {
   .marketing-grid-4,
   .marketing-grid-5 {
     grid-template-columns: 1fr;
+  }
+
+  .marketing-proof-strip {
+    padding: 16px;
+    gap: 12px;
+  }
+
+  .marketing-proof-credibility-line {
+    font-size: 0.76rem;
   }
   .marketing-hero-stats {
     font-size: 12px;
