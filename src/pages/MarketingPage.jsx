@@ -367,6 +367,10 @@ export default function MarketingPage({ variant = "control", onOpenInstallModal 
             72 hours.
           </p>
         </aside>
+        <div className="marketing-hero-stats">
+          +29% repeat purchases • 2.2 orders per customer • 36% revenue growth
+          <div className="marketing-hero-stats-sub">Tested on early Shopify stores</div>
+        </div>
       </section>
 
       <section className="marketing-section marketing-proof-strip" aria-label="Early results">
