@@ -11,7 +11,10 @@ const ALLOWED_EVENTS = new Set([
   "landing_cta_click",
   "landing_secondary_cta_click",
   "landing_install_click",
-  "landing_blog_card_click"
+  "landing_blog_card_click",
+  "demo_placeholder_click",
+  "proof_section_view",
+  "testimonial_view"
 ]);
 
 const SESSION_STORAGE_KEY = "bundlecart_session_id";

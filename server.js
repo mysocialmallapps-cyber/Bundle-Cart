@@ -75,14 +75,20 @@ const ALLOWED_ANALYTICS_EVENTS = new Set([
   "landing_cta_click",
   "landing_secondary_cta_click",
   "landing_install_click",
-  "landing_blog_card_click"
+  "landing_blog_card_click",
+  "demo_placeholder_click",
+  "proof_section_view",
+  "testimonial_view"
 ]);
 const LANDING_ANALYTICS_ALLOWED_EVENTS = new Set([
   "landing_page_view",
   "landing_cta_click",
   "landing_secondary_cta_click",
   "landing_install_click",
-  "landing_blog_card_click"
+  "landing_blog_card_click",
+  "demo_placeholder_click",
+  "proof_section_view",
+  "testimonial_view"
 ]);
 const LANDING_ANALYTICS_ALLOWED_VARIANTS = new Set(["control", "repeat_purchase_v1"]);
 const ANALYTICS_ALLOWED_PAYLOAD_FIELDS = new Set([

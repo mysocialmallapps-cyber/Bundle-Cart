@@ -60,8 +60,20 @@ const IMPACT_METRICS = [
   { label: "Orders linked", value: "1,248" },
   { label: "Repeat orders triggered", value: "482" },
   { label: "Shipping saved", value: "$6,740" },
-  { label: "Orders per customer", value: "2.6" },
-  { label: "Bundle windows created", value: "317" }
+  { label: "Orders per customer", value: "2.2" }
+];
+
+const PROOF_STATS = [
+  { value: "+29%", label: "Repeat purchases" },
+  { value: "2.2", label: "Orders per customer" },
+  { value: "Tested on early Shopify stores", label: "" }
+];
+
+const TRUST_LAYER_ITEMS = [
+  "Built for Shopify stores",
+  "No fulfillment changes",
+  "Merchant dashboard included",
+  "Tracks repeat orders automatically"
 ];
 
 const FAQ_ITEMS = [
@@ -104,18 +116,19 @@ const VARIANT_CONTENT = {
         "After the first order, customers unlock free shipping for 72 hours — giving them a reason to come back and buy again without more ads.",
       secondaryCtaLabel: "Watch demo"
     },
+    heroRevenueLine: "Turn one checkout into multiple orders.",
     heroNote: "Built for Shopify stores. No fulfillment changes.",
-    heroMessage: "Revenue outcome first: remove shipping friction and capture follow-up orders.",
+    heroMessage: "Turn one checkout into multiple orders.",
     checkoutShowcase: {
-      eyebrow: "See BundleCart in checkout",
-      title: "See how BundleCart turns one shipping fee into repeat orders",
+      eyebrow: "See it in checkout",
+      title: "Turn one shipping fee into repeat orders",
       body:
-        "Customers pay shipping once, unlock a 72-hour free-shipping window, and come back to place more orders."
+        "Customers pay shipping once, unlock a 72-hour window, and come back to buy again."
     },
     demo: {
       eyebrow: "See BundleCart in action",
-      title: "Watch how BundleCart turns one shipping fee into multiple orders",
-      body: "Quick walkthrough of the checkout flow, shipping unlock, and merchant dashboard."
+      title: "See how BundleCart works in 30 seconds",
+      body: "Watch the checkout flow, shipping unlock, repeat-order journey, and merchant dashboard."
     },
     beforeAfterTitle: "Why BundleCart works",
     howItWorksTitle: "How it works",
@@ -175,18 +188,19 @@ const VARIANT_CONTENT = {
         "Customers pay shipping once, unlock free shipping for 72 hours, and come back to buy again — helping stores grow repeat purchases without more ad spend.",
       secondaryCtaLabel: "Watch demo"
     },
+    heroRevenueLine: "Increase orders without increasing ad spend.",
     heroNote: "Built for Shopify stores. No fulfillment changes.",
-    heroMessage: "Show customers a clear shipping unlock and capture second and third orders faster.",
+    heroMessage: "Increase orders without increasing ad spend.",
     checkoutShowcase: {
-      eyebrow: "See BundleCart in checkout",
-      title: "See how BundleCart turns one shipping fee into repeat orders",
+      eyebrow: "See it in checkout",
+      title: "Turn one shipping fee into repeat orders",
       body:
-        "Customers pay shipping once, unlock a 72-hour free-shipping window, and come back to place more orders."
+        "Customers pay shipping once, unlock a 72-hour window, and come back to buy again."
     },
     demo: {
       eyebrow: "See BundleCart in action",
-      title: "Watch how BundleCart turns one shipping fee into multiple orders",
-      body: "Quick walkthrough of the checkout flow, shipping unlock, and merchant dashboard."
+      title: "See how BundleCart works in 30 seconds",
+      body: "Watch the checkout flow, shipping unlock, repeat-order journey, and merchant dashboard."
     },
     beforeAfterTitle: "Why BundleCart works",
     howItWorksTitle: "How it works",
@@ -258,6 +272,8 @@ export default function MarketingPage({ variant = "control" }) {
   useEffect(() => {
     trackEvent("page_view", { path: "/", variant });
     trackHomepageLandingEvent("landing_page_view");
+    trackHomepageLandingEvent("proof_section_view", { section: "proof_strip" });
+    trackHomepageLandingEvent("testimonial_view", { section: "impact_feedback" });
   }, [variant]);
 
   function openInstallModal() {
@@ -337,6 +353,7 @@ export default function MarketingPage({ variant = "control" }) {
             <h1>{renderMultilineText(variantConfig.hero.title)}</h1>
             <p className="marketing-subheadline">{renderMultilineText(variantConfig.hero.subtitle)}</p>
           </div>
+          <p className="marketing-hero-revenue-line">{variantConfig.heroRevenueLine}</p>
           <div className="marketing-cta-row">
             <button
               type="button"
@@ -367,7 +384,6 @@ export default function MarketingPage({ variant = "control" }) {
             </a>
           </div>
           <p className="marketing-hero-note">{variantConfig.heroNote}</p>
-          <div className="marketing-hero-message-bar">{variantConfig.heroMessage}</div>
         </div>
       </section>
 
@@ -410,6 +426,28 @@ export default function MarketingPage({ variant = "control" }) {
         </aside>
       </section>
 
+      <section className="marketing-section marketing-proof-strip" aria-label="Early results">
+        <div className="marketing-section-header">
+          <h2>Early results</h2>
+        </div>
+        <div className="marketing-grid marketing-grid-3">
+          {PROOF_STATS.map((stat) => (
+            <article key={`${stat.value}-${stat.label}`} className="marketing-proof-card">
+              <p className="marketing-proof-value">{stat.value}</p>
+              {stat.label ? <p className="marketing-proof-label">{stat.label}</p> : null}
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="marketing-trust-strip" aria-label="Trust highlights">
+        {TRUST_LAYER_ITEMS.map((item) => (
+          <article key={item} className="marketing-trust-chip">
+            {item}
+          </article>
+        ))}
+      </section>
+
       <section id="demo-placeholder" className="marketing-section marketing-section-tinted marketing-demo-section">
         <div className="marketing-section-header">
           <p className="marketing-eyebrow">{variantConfig.demo.eyebrow}</p>
@@ -419,12 +457,16 @@ export default function MarketingPage({ variant = "control" }) {
         <button
           type="button"
           className="marketing-demo-placeholder"
-          onClick={() =>
+          onClick={() => {
             trackHomepageLandingEvent("landing_cta_click", {
               cta_label: "Demo placeholder",
               section: "demo_placeholder"
-            })
-          }
+            });
+            trackHomepageLandingEvent("demo_placeholder_click", {
+              cta_label: "Demo placeholder",
+              section: "demo_placeholder"
+            });
+          }}
           title="Demo placeholder"
         >
           <span className="marketing-demo-play">▶</span>
@@ -501,6 +543,15 @@ export default function MarketingPage({ variant = "control" }) {
               </article>
             ))}
           </div>
+          <article className="marketing-testimonial-card">
+            <p className="marketing-testimonial-label">Early merchant feedback</p>
+            <blockquote>
+              “We&apos;re a new store and struggled to get repeat orders. After adding BundleCart,
+              customers actually started coming back — we&apos;ve seen more repeat purchases in a few
+              days than before.”
+            </blockquote>
+            <p className="marketing-testimonial-role">Shopify store owner</p>
+          </article>
         </div>
       </section>
 

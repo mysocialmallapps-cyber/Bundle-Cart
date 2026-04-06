@@ -542,6 +542,13 @@ input:focus {
   max-width: 44ch;
 }
 
+.marketing-hero-revenue-line {
+  margin: 0;
+  color: #3f2f7a;
+  font-size: 0.98rem;
+  font-weight: 700;
+}
+
 .marketing-cta-row {
   display: flex;
   flex-wrap: wrap;
@@ -750,6 +757,35 @@ input:focus {
   line-height: 1.45;
 }
 
+.marketing-proof-strip {
+  display: grid;
+  gap: 12px;
+}
+
+.marketing-proof-card {
+  background: #fff;
+  border: 1px solid #e4dbff;
+  border-radius: 14px;
+  padding: 14px;
+  box-shadow: 0 8px 18px rgba(34, 23, 73, 0.06);
+  display: grid;
+  gap: 4px;
+}
+
+.marketing-proof-value {
+  margin: 0;
+  color: #2f1f63;
+  font-size: 1.45rem;
+  font-weight: 800;
+  line-height: 1.15;
+}
+
+.marketing-proof-label {
+  margin: 0;
+  color: #5f567c;
+  font-size: 0.9rem;
+}
+
 .marketing-demo-section {
   display: grid;
   gap: 14px;
@@ -758,21 +794,28 @@ input:focus {
 .marketing-demo-placeholder {
   appearance: none;
   width: 100%;
-  border: 1px solid #d8c9ff;
+  border: 2px solid #cdb8ff;
   border-radius: 16px;
   background: linear-gradient(135deg, #f4efff 0%, #ece8ff 100%);
-  min-height: 220px;
+  min-height: 250px;
   display: grid;
   place-content: center;
-  gap: 8px;
+  gap: 10px;
   color: #3e2f7a;
   font-weight: 600;
   cursor: pointer;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.42),
+    0 12px 24px rgba(71, 45, 151, 0.16);
 }
 
 .marketing-demo-placeholder:hover {
-  border-color: #c8b4ff;
+  border-color: #bfa5ff;
+  transform: translateY(-1px);
+}
+
+.marketing-demo-placeholder span:last-child {
+  font-size: 0.95rem;
 }
 
 .marketing-demo-play {
@@ -810,6 +853,40 @@ input:focus {
   color: #35256b !important;
   font-size: 1.24rem;
   font-weight: 700;
+}
+
+.marketing-testimonial-card {
+  margin-top: 14px;
+  background: #ffffff;
+  border: 1px solid #e4dcff;
+  border-radius: 14px;
+  padding: 14px;
+  box-shadow: 0 8px 18px rgba(34, 23, 73, 0.06);
+  display: grid;
+  gap: 8px;
+}
+
+.marketing-testimonial-label {
+  margin: 0;
+  color: #523ba4;
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.marketing-testimonial-card blockquote {
+  margin: 0;
+  color: #4f476d;
+  line-height: 1.55;
+  font-size: 0.96rem;
+}
+
+.marketing-testimonial-role {
+  margin: 0;
+  color: #6a6287;
+  font-size: 0.83rem;
+  font-weight: 600;
 }
 
 .marketing-demo-note {
