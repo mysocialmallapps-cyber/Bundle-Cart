@@ -63,6 +63,27 @@ const TRUST_LAYER_ITEMS = [
   "Tracks repeat orders automatically"
 ];
 
+const PRICING_TIERS = [
+  {
+    name: "Starter",
+    price: "$20/month",
+    features: ["Up to 100 bundle orders/month", "Basic analytics", "Email support"],
+    featured: false
+  },
+  {
+    name: "Growth",
+    price: "$50/month",
+    features: ["Up to 1000 bundle orders/month", "Full merchant dashboard", "Core features"],
+    featured: true
+  },
+  {
+    name: "Scale",
+    price: "$100/month",
+    features: ["Unlimited orders", "Priority support", "Advanced insights"],
+    featured: false
+  }
+];
+
 const FAQ_ITEMS = [
   {
     q: "How does BundleCart work?",
@@ -499,29 +520,43 @@ export default function MarketingPage({ variant = "control", onOpenInstallModal 
       </section>
 
       <section className="marketing-section">
-        <h2>Pricing</h2>
-        <div className="marketing-pricing-card">
-          <p className="marketing-price">$50 / month</p>
-          <p className="marketing-pricing-subline">First month free</p>
-          <ul className="marketing-pricing-list">
-            <li>$5 per qualifying first bundle order</li>
-            <li>No extra charge for linked free orders in the same window</li>
-            <li>Includes merchant performance dashboard metrics</li>
-          </ul>
-          <p className="subtle">{variantConfig.pricingSubtle}</p>
-          {variantConfig.pricingExtraLine ? <p className="subtle">{variantConfig.pricingExtraLine}</p> : null}
-          <a
-            className="marketing-btn marketing-btn-primary"
-            href="#"
-            onClick={(event) => {
-              event.preventDefault();
-              openInstallModal();
-            }}
-            title="Install BundleCart"
-          >
-            Install BundleCart
-          </a>
+        <h2>Simple pricing that scales with your orders</h2>
+        <div className="marketing-grid marketing-grid-3 marketing-pricing-grid">
+          {PRICING_TIERS.map((tier) => (
+            <article
+              key={tier.name}
+              className={`marketing-pricing-card marketing-pricing-tier ${tier.featured ? "marketing-pricing-tier-featured" : ""}`}
+            >
+              {tier.featured ? <p className="marketing-pricing-badge">Most popular</p> : null}
+              <h3 className="marketing-pricing-tier-name">{tier.name}</h3>
+              <p className="marketing-price">{tier.price}</p>
+              <ul className="marketing-pricing-list">
+                {tier.features.map((feature) => (
+                  <li key={feature}>{feature}</li>
+                ))}
+              </ul>
+            </article>
+          ))}
         </div>
+        <p className="subtle marketing-pricing-logic-line">
+          Only pay when BundleCart drives qualifying first orders. Repeat orders in the same window are
+          not billed again.
+        </p>
+        <p className="subtle">{variantConfig.pricingSubtle}</p>
+        <p className="subtle marketing-pricing-growth-line">
+          Start small and scale as your repeat purchases grow.
+        </p>
+        <a
+          className="marketing-btn marketing-btn-primary"
+          href="#"
+          onClick={(event) => {
+            event.preventDefault();
+            openInstallModal();
+          }}
+          title="Install BundleCart"
+        >
+          Install BundleCart
+        </a>
       </section>
 
       <section className="marketing-section marketing-final-cta">

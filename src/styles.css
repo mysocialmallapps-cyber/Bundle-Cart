@@ -1501,6 +1501,85 @@ input:focus {
   box-shadow: 0 12px 24px rgba(0, 0, 0, 0.12);
 }
 
+.marketing-pricing-grid {
+  align-items: stretch;
+  margin-top: 4px;
+}
+
+.marketing-pricing-tier {
+  background: #fff;
+  border: 1px solid #e4dcff;
+  box-shadow: 0 12px 24px rgba(34, 23, 73, 0.08);
+  padding: 18px;
+  gap: 12px;
+}
+
+.marketing-pricing-tier p,
+.marketing-pricing-tier .subtle {
+  color: #584f74;
+}
+
+.marketing-pricing-tier-name {
+  margin: 0;
+  color: #2a2148;
+  font-size: 1.06rem;
+}
+
+.marketing-pricing-tier .marketing-price {
+  color: #261f45;
+  font-size: clamp(1.8rem, 2.8vw, 2.2rem);
+}
+
+.marketing-pricing-tier .marketing-pricing-list {
+  color: #4f4768;
+}
+
+.marketing-pricing-badge {
+  margin: 0;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #45208d;
+  background: #efe8ff;
+  border: 1px solid #dac8ff;
+}
+
+.marketing-pricing-tier-featured {
+  background: linear-gradient(145deg, #261259 0%, #3f2186 100%);
+  border-color: #4a2ba4;
+  box-shadow: 0 20px 34px rgba(41, 24, 88, 0.3);
+  transform: translateY(-2px);
+}
+
+.marketing-pricing-tier-featured .marketing-pricing-tier-name,
+.marketing-pricing-tier-featured .marketing-price {
+  color: #fff;
+}
+
+.marketing-pricing-tier-featured .marketing-pricing-list,
+.marketing-pricing-tier-featured p,
+.marketing-pricing-tier-featured .subtle {
+  color: #dfd6ff;
+}
+
+.marketing-pricing-tier-featured .marketing-pricing-badge {
+  color: #3f227e;
+  background: #fff;
+  border-color: #fff;
+}
+
+.marketing-pricing-logic-line {
+  margin-top: 14px;
+}
+
+.marketing-pricing-growth-line {
+  margin-bottom: 14px;
+}
+
 .marketing-faq-list {
   display: grid;
   gap: 10px;
