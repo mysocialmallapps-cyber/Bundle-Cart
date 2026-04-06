@@ -70,8 +70,8 @@ const PRICING_TIERS = [
     features: [
       "Up to 100 bundle orders/month",
       "Basic analytics",
-      "Email support",
-      "+ $5 per qualifying bundle order"
+      "$5 when a customer selects BundleCart at checkout",
+      "All additional orders in the 72-hour window are free"
     ],
     featured: false
   },
@@ -79,10 +79,10 @@ const PRICING_TIERS = [
     name: "Growth",
     price: "$50/month",
     features: [
-      "Up to 1000 bundle orders/month",
+      "Up to 1,000 bundle orders/month",
       "Full merchant dashboard",
-      "Core features",
-      "+ $5 per qualifying bundle order"
+      "$5 when a customer selects BundleCart at checkout",
+      "All additional orders in the 72-hour window are free"
     ],
     featured: true
   },
@@ -90,10 +90,10 @@ const PRICING_TIERS = [
     name: "Scale",
     price: "$100/month",
     features: [
-      "Unlimited orders",
+      "Unlimited bundle orders",
       "Priority support",
-      "Advanced insights",
-      "+ $5 per qualifying bundle order"
+      "$5 when a customer selects BundleCart at checkout",
+      "All additional orders in the 72-hour window are free"
     ],
     featured: false
   }
@@ -196,7 +196,7 @@ const VARIANT_CONTENT = {
     pricingSubtle:
       "BundleCart is built for stores that want repeat purchases, stronger retention, and measurable shipping-driven growth.",
     pricingExtraLine:
-      "Only pay when BundleCart drives qualifying first orders. Linked free orders in the same active window are not billed again.",
+      "Fixed monthly + pay only when BundleCart drives new orders.",
     finalCta: {
       title: "Turn shipping into repeat purchases",
       body:
@@ -268,7 +268,7 @@ const VARIANT_CONTENT = {
     pricingSubtle:
       "BundleCart is built for stores focused on repeat purchases, retention, and incremental revenue from returning shoppers.",
     pricingExtraLine:
-      "Only pay when BundleCart drives qualifying first orders. Linked free orders in the same active window are not billed again.",
+      "Fixed monthly + pay only when BundleCart drives new orders.",
     finalCta: {
       title: "Turn shipping into repeat purchases",
       body:
@@ -536,6 +536,7 @@ export default function MarketingPage({ variant = "control", onOpenInstallModal 
 
       <section className="marketing-section">
         <h2>Simple pricing that scales with your orders</h2>
+        <p className="subtle marketing-pricing-logic-line">{variantConfig.pricingExtraLine}</p>
         <div className="marketing-grid marketing-grid-3 marketing-pricing-grid">
           {PRICING_TIERS.map((tier) => (
             <article
@@ -554,7 +555,7 @@ export default function MarketingPage({ variant = "control", onOpenInstallModal 
           ))}
         </div>
         <p className="subtle marketing-pricing-logic-line">
-          Only pay when BundleCart drives a qualifying first order.
+          You are only charged on the first order in the 72-hour window.
         </p>
         <p className="subtle">{variantConfig.pricingSubtle}</p>
         <div className="marketing-pricing-how-it-works">
