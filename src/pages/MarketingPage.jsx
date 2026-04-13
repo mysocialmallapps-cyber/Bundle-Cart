@@ -423,16 +423,30 @@ export default function MarketingPage({ variant = "control", onOpenInstallModal 
           <h2>{variantConfig.demo.title}</h2>
           <p>{variantConfig.demo.body}</p>
         </div>
-        <video
-          className="marketing-demo-video"
-          src="/OLD_bundlecart-demo.mp4"
-          autoPlay
-          muted
-          loop
-          controls
-          playsInline
-          preload="metadata"
-        />
+        <div className="marketing-demo-video">
+          <div
+            style={{
+              position: "relative",
+              boxSizing: "content-box",
+              maxHeight: "80vh",
+              width: "100%",
+              aspectRatio: "1.76",
+              padding: "40px 0 40px 0"
+            }}
+          >
+            <iframe
+              src="https://app.supademo.com/embed/cmnxgpauo0lesiq7p5t36hp32?embed_v=2&utm_source=embed"
+              loading="lazy"
+              title="BundleCart on Shopify"
+              allow="clipboard-write"
+              frameBorder="0"
+              webkitallowfullscreen="true"
+              mozallowfullscreen="true"
+              allowFullScreen
+              style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }}
+            />
+          </div>
+        </div>
       </section>
 
       <section className="marketing-section">
