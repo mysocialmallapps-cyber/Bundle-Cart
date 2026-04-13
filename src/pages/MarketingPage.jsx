@@ -427,11 +427,8 @@ export default function MarketingPage({ variant = "control", onOpenInstallModal 
           <div
             style={{
               position: "relative",
-              boxSizing: "content-box",
-              maxHeight: "80vh",
               width: "100%",
-              aspectRatio: "1.76",
-              padding: "40px 0 40px 0"
+              aspectRatio: "1.76"
             }}
           >
             <iframe
