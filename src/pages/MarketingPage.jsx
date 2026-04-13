@@ -424,13 +424,7 @@ export default function MarketingPage({ variant = "control", onOpenInstallModal 
           <p>{variantConfig.demo.body}</p>
         </div>
         <div className="marketing-demo-video">
-          <div
-            style={{
-              position: "relative",
-              width: "100%",
-              aspectRatio: "1.76"
-            }}
-          >
+          <div className="marketing-demo-embed-frame">
             <iframe
               src="https://app.supademo.com/embed/cmnxgpauo0lesiq7p5t36hp32?embed_v=2&utm_source=embed"
               loading="lazy"
@@ -440,7 +434,7 @@ export default function MarketingPage({ variant = "control", onOpenInstallModal 
               webkitallowfullscreen="true"
               mozallowfullscreen="true"
               allowFullScreen
-              style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }}
+              className="marketing-demo-embed-iframe"
             />
           </div>
         </div>
