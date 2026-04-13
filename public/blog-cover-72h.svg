@@ -1,0 +1,36 @@
+<svg width="1200" height="675" viewBox="0 0 1200 675" fill="none" xmlns="http://www.w3.org/2000/svg">
+<defs>
+  <linearGradient id="bg" x1="120" y1="40" x2="1080" y2="635" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#6D28D9"/>
+    <stop offset="1" stop-color="#4F46E5"/>
+  </linearGradient>
+  <linearGradient id="card" x1="0" y1="0" x2="420" y2="300" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#FFFFFF" stop-opacity="0.98"/>
+    <stop offset="1" stop-color="#F3EDFF"/>
+  </linearGradient>
+</defs>
+<rect width="1200" height="675" rx="42" fill="url(#bg)"/>
+<ellipse cx="250" cy="130" rx="190" ry="80" fill="#C4B5FD" fill-opacity="0.24"/>
+<ellipse cx="970" cy="560" rx="230" ry="92" fill="#A78BFA" fill-opacity="0.26"/>
+<rect x="85" y="86" width="310" height="222" rx="24" fill="url(#card)" stroke="#DDD6FE"/>
+<rect x="445" y="122" width="300" height="215" rx="24" fill="url(#card)" stroke="#DDD6FE"/>
+<rect x="793" y="180" width="308" height="210" rx="24" fill="url(#card)" stroke="#DDD6FE"/>
+<rect x="115" y="122" width="130" height="18" rx="9" fill="#DDD6FE"/>
+<rect x="115" y="152" width="240" height="14" rx="7" fill="#E9D5FF"/>
+<rect x="115" y="176" width="210" height="14" rx="7" fill="#E9D5FF"/>
+<rect x="475" y="158" width="120" height="18" rx="9" fill="#DDD6FE"/>
+<rect x="475" y="188" width="232" height="14" rx="7" fill="#E9D5FF"/>
+<rect x="475" y="212" width="196" height="14" rx="7" fill="#E9D5FF"/>
+<rect x="825" y="216" width="120" height="18" rx="9" fill="#DDD6FE"/>
+<rect x="825" y="246" width="234" height="14" rx="7" fill="#E9D5FF"/>
+<rect x="825" y="270" width="196" height="14" rx="7" fill="#E9D5FF"/>
+<circle cx="600" cy="474" r="126" fill="#FFFFFF" fill-opacity="0.96"/>
+<circle cx="600" cy="474" r="112" stroke="#C4B5FD" stroke-width="16"/>
+<line x1="600" y1="474" x2="600" y2="404" stroke="#6D28D9" stroke-width="14" stroke-linecap="round"/>
+<line x1="600" y1="474" x2="652" y2="508" stroke="#6D28D9" stroke-width="14" stroke-linecap="round"/>
+<text x="600" y="532" text-anchor="middle" fill="#5B21B6" font-size="58" font-family="Inter, Arial, sans-serif" font-weight="800">72h</text>
+<rect x="254" y="476" width="210" height="56" rx="28" fill="#F5F3FF" stroke="#DDD6FE"/>
+<text x="359" y="513" text-anchor="middle" fill="#5B21B6" font-size="26" font-family="Inter, Arial, sans-serif" font-weight="700">Shop now</text>
+<rect x="730" y="476" width="226" height="56" rx="28" fill="#F5F3FF" stroke="#DDD6FE"/>
+<text x="843" y="513" text-anchor="middle" fill="#5B21B6" font-size="26" font-family="Inter, Arial, sans-serif" font-weight="700">Buy later</text>
+</svg>

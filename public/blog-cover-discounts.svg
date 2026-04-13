@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">Why discounts do not always save money</title>
+  <desc id="desc">Purple themed illustration with discount tags and rising cart total bars.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f7f2ff" />
+      <stop offset="100%" stop-color="#ece9ff" />
+    </linearGradient>
+    <linearGradient id="purpleTag" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6d28d9" />
+      <stop offset="100%" stop-color="#4f46e5" />
+    </linearGradient>
+    <linearGradient id="pinkTag" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#a855f7" />
+      <stop offset="100%" stop-color="#7c3aed" />
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#3d2a82" flood-opacity="0.2" />
+    </filter>
+  </defs>
+
+  <rect width="1280" height="720" fill="url(#bg)" />
+
+  <g opacity="0.46" fill="#d8ceff">
+    <circle cx="180" cy="124" r="86" />
+    <circle cx="300" cy="96" r="68" />
+    <circle cx="1120" cy="118" r="92" />
+    <circle cx="1008" cy="88" r="58" />
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="140" y="150" width="1000" height="430" rx="34" fill="#fff" stroke="#e8ddff" stroke-width="3" />
+  </g>
+
+  <text x="200" y="226" fill="#3a2a70" font-size="46" font-family="Inter, Arial, sans-serif" font-weight="700">
+    Discounts can feel like savings&
+  </text>
+  <text x="200" y="276" fill="#5f547e" font-size="30" font-family="Inter, Arial, sans-serif">
+    but your total spend can still climb.
+  </text>
+
+  <g transform="translate(205,326)">
+    <rect width="540" height="198" rx="22" fill="#f7f3ff" stroke="#e5d9ff" stroke-width="2" />
+    <text x="28" y="48" fill="#4a3a82" font-size="30" font-family="Inter, Arial, sans-serif" font-weight="700">
+      Planned spend: $25
+    </text>
+    <rect x="30" y="74" width="184" height="16" rx="8" fill="#d6c8ff" />
+    <rect x="30" y="108" width="312" height="16" rx="8" fill="#baa2ff" />
+    <rect x="30" y="142" width="466" height="16" rx="8" fill="#7c62df" />
+    <text x="520" y="154" text-anchor="end" fill="#2d1f57" font-size="30" font-family="Inter, Arial, sans-serif" font-weight="800">
+      Final total: $60
+    </text>
+  </g>
+
+  <g transform="translate(786,340)">
+    <path d="M38 0h214c14 0 26 12 26 26v150c0 14-12 26-26 26H38L0 100z" fill="url(#purpleTag)" />
+    <text x="152" y="84" text-anchor="middle" fill="#fff" font-size="42" font-family="Inter, Arial, sans-serif" font-weight="800">
+      20% OFF
+    </text>
+    <text x="152" y="130" text-anchor="middle" fill="#efe8ff" font-size="20" font-family="Inter, Arial, sans-serif">
+      Feels cheaper
+    </text>
+  </g>
+
+  <g transform="translate(842,270) rotate(-10)">
+    <rect x="0" y="0" width="170" height="76" rx="16" fill="url(#pinkTag)" />
+    <text x="85" y="47" text-anchor="middle" fill="#fff" font-size="26" font-family="Inter, Arial, sans-serif" font-weight="800">
+      SAVE NOW
+    </text>
+  </g>
+
+  <text x="640" y="654" text-anchor="middle" fill="#5f4f93" font-size="28" font-family="Inter, Arial, sans-serif" font-weight="600">
+    Perceived savings ` Real savings
+  </text>
+</svg>
